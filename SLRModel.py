@@ -15,7 +15,7 @@ class globalSLRModel:
     Levitus et al. (2012)
     Church et al. (2011)
     Wong et al. (2017) (BRICKv0.3 / mimiBRICK)
-    Fox-Kemper et al. (2021) (IPCC report, Chapter 9 (?))
+    Fox-Kemper et al. (2021) (IPCC report, Chapter 9)
     Nauels et al. (2017) (MAGICC6)
     Li et al. (2020)
     Wigley and Raper (2005)
@@ -96,7 +96,7 @@ class globalSLRModel:
         ########## Parameter settings ###################
 
         ####################################################################################
-        ###########          Tune these parameters          ################################
+        ###########          Calibrated Parameters          ################################
         ####################################################################################
 
         ### These are the scale factors that can be varied within [0,1] to cover the full uncertainty range
