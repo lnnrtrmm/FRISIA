@@ -45,4 +45,4 @@ Smith, C. J., Forster, P. M., Allen, M., Leach, N., Millar, R. J., Passerello, G
 
 Vafeidis, A. T., Nicholls, R. J., McFadden, L., Tol, R. S. J., Hinkel, J., Spencer, T., Grashoff, P. S., Boot, G., and Klein, R. J. T.: A New Global Coastal Database for Impact and Vulnerability Analysis to Sea-Level Rise, Journal of Coastal Research, 24, 917–924, https://doi.org/10.2112/06-0725.1, 2008
 
-Wong, T. E., Bakker, A. M. R., Ruckert, K., Applegate, P., Slangen, A. B. A., and Keller, K.: BRICK v0.2, a simple, accessible, and transparent model framework for climate and regional sea-level projections, Geoscientific Model Development, 10, 2741–2760, https://doi.org/10.5194/gmd-10-2741-2017, 2017
+Wong, T. E., Ledna, C., Rennels, L., Sheets, H., Errickson, F. C., Diaz, D., and Anthoff, D.: Sea Level and Socioeconomic Uncertainty Drives High-End Coastal Adaptation Costs, Earth’s Future, 10, e2022EF003 061, https://doi.org/10.1029/2022EF003061, 2022
