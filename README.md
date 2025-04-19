@@ -5,8 +5,6 @@ This repository contains:
 - A class of the sea level rise (SLR) component of FRISIA that calculates global SLR based on the five most important contributors (thermosteric SLR, SLR from land water storage changes, melting of mountaing glaciers and the Greenland and Antarctic ice sheet)
 - The input data needed to run the SLR and the impacts and adaptation modules of FRISIA
 - An example script to run the SLR components
-
-To be added upon submission of Ramme et al. (in preparation) to GMD:
 - A class of the impacts and adaptation component of FRISIA
 - An example script to run the impacts and adaptation component
 

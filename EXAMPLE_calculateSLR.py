@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
-from SLRModel import globalSLRModel
+from src.SLRModel import globalSLRModel
 
 ########## FAIR input data for SLR model ########################
 scenarios = ['ssp119', 'ssp245', 'ssp585']
