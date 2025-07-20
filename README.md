@@ -1,5 +1,5 @@
 # FRISIA
-FRISIA is the *Feedback-based knowledge Repository for Intergrated assessments of Sea level rise Impacts and Adaptation*. Its first published version 1.0 is fully described in Ramme et al. (in preparation). FRISIAv1.0 is developed as part of the new integrated assessment model [FRIDA](https://github.com/metno/WorldTransFRIDA) within the [WorldTrans project](https://worldtrans-horizon.eu/) of the Horizon Europe research and innovation programs under grant agreement no. 101081661. 
+FRISIA is the *Feedback-based knowledge Repository for Intergrated assessments of Sea level rise Impacts and Adaptation*. Its first published version 1.0 is fully described in [Ramme et al. (preprint)](https://egusphere.copernicus.org/preprints/2025/egusphere-2025-1875/). FRISIAv1.0 is developed as part of the new integrated assessment model [FRIDA](https://github.com/metno/WorldTransFRIDA) within the [WorldTrans project](https://worldtrans-horizon.eu/) of the Horizon Europe research and innovation programs under grant agreement no. 101081661. 
 
 This repository contains:
 - A class of the sea level rise (SLR) component of FRISIA that calculates global SLR based on the five most important contributors (thermosteric SLR, SLR from land water storage changes, melting of mountaing glaciers and the Greenland and Antarctic ice sheet)
