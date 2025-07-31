@@ -279,7 +279,7 @@ class SLRImpactModel:
         #### Initial values and fit parameters for pre-defined model versions ##########
         ################################################################################
         
-        if version in ['DIVA_global', 'DIVA_bipolar', 'DIVA_regional']:
+        if version in ['DIVA_global', 'DIVA_bipolar', 'DIVA_regional', 'DIVA_GDPdens']:
             # These are predefined aggregation levels that load input parameters from files
             # Input parameters are general aggregated information from the DIVA dataset 
             # and the fit parameters used to match DIVA and CIAM data of inundation, surge exposure etc.
@@ -344,7 +344,7 @@ class SLRImpactModel:
                 parameter[1,1,:] = df.b.values[:]
                 parameter[1,2,:] = df.c.values[:]
         else:
-            sys.exit('Specified model version "'+version+'" not allowed! Available options are "DIVA_global", "DIVA_bipolar", "DIVA_regional".')
+            sys.exit('Specified model version "'+version+'" not allowed! Available options are "DIVA_global", "DIVA_bipolar", "DIVA_regional", "DIVA_GDPdens".')
 
         ################################################################################
         ################################################################################
