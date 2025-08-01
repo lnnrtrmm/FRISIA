@@ -925,6 +925,9 @@ class SLRImpactModel:
         # Total opportunity costs of the land that is lost
         self.total_opportunity_cost = self.fp_land_opportunity_cost + self.lost_land_opportunity_cost
 
+        # All land that is lost either for protection or from inundation or from retreat
+        self.land_lost = np.maximum(lost_area, self.total_fp_length[:,np.newaxis] * 1.7 * self.average_fp_height * 0.001 / 2.0)
+        
 
         #####
         # CIAM reference: These are for comparison to CIAM output
@@ -935,6 +938,10 @@ class SLRImpactModel:
         self.net_construct_cost = self.fp_land_opportunity_cost + self.effective_annual_investment_in_fp \
                 + self.annual_costs_of_fp_maintenance - self.annual_costs_of_fp_maintenance_noadapt
         self.storm_cost = self.annual_storm_damage_to_assets
+
+
+        ### Overall SLR costs, all potential costs added upp
+        self.annual_SLR_costs = self.relocation_cost + self.flood_cost +  self.net_construct_cost + self.storm_cost
 
 
         return
