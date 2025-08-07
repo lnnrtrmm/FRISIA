@@ -109,6 +109,9 @@ class SLRImpactModel:
         # Include maximum available money for flood protection as fraction of GDP?
         self.include_fp_investment_cap = False
 
+        # Include the possibility that raised flood protection is breached (i.e. protection is raised, but SLR is even faster)
+        self.include_failing_protection = False
+
         # Include the effect of asset reduction and changing population on GDP per capita?
         self.include_gdp_effect = False
 
@@ -321,13 +324,16 @@ class SLRImpactModel:
             # --> Fitted only to positive values of effective flood height, becaus negative flood height
             # (i.e. better protection than in reference case) is not interesting here.
             
-            parameters = [self.inund_params_area, self.inund_params_assets, self.inund_params_people, self.storm_suscept_params_assets, 
+            self.variables = [self.inundated_area, self.inundated_original_asset_fraction, self.inundated_original_people_fraction,
+                              self.orig_susceptible_asset_fraction, self.orig_susceptible_people_fraction, self.orig_exposed_asset_fraction,
+                              self.orig_exposed_asset_fraction]
+            self.parameters = [self.inund_params_area, self.inund_params_assets, self.inund_params_people, self.storm_suscept_params_assets, 
                           self.storm_suscept_params_people, self.storm_exposure_params_assets, self.storm_exposure_params_people]
             filenames_extensions = ['inund_params_area', 'inund_params_assets', 'inund_params_people', 'storm_suscept_params_assets',
                                     'storm_suscept_params_people', 'storm_exposure_params_assets', 'storm_exposure_params_people']
 
             path = input_path+'fit_function_parameters/'
-            for iparam, parameter in enumerate(parameters):
+            for iparam, parameter in enumerate(self.parameters):
                 # Fits including the initial flood protection
                 # Here, the data were fitted using a logistic function: y = A / (1 + exp(-k*(x-x0)))
                 df = pd.read_csv(path+version+'_'+filenames_extensions[iparam]+'.csv', delimiter=',')
@@ -376,6 +382,22 @@ class SLRImpactModel:
             b=params[ifunc,1]
             c=params[ifunc,2]
             return (np.exp((F - c) / a) - 1.0) / b
+
+    def __calc_fitted_variable(self, dflood, dh, params):
+        # This accounts for the possibility that dikes are raised, but SLR was faster (include_failing_protection=True)
+        
+        # E.g. for inundated asset fractions:
+        # Assume a SLR of 2m, but protection was also increased by dh=1m. Then dflood = SLR - dh = 1m.
+        # The fit_function would simply calculate the inundated asset fraction "f0" for 1m in this case.
+        # However, in reality the value would be higher, because those segments, where the protection is breached would be
+        # inundated by 2m of SLR not 1m. Inundated asset fractions of 2m of SLR are f1 here.
+        # The answer is somewhere in the middle, hence the approximated equation below, which was tested on the segment 
+        # data to produce reasonable estimates of the inundated asset fractions (and the other parameters) in these scenarios.
+
+        # If this is not activated, then dh = 0 and f = f0, so the option is automatically turned off.
+        f0 = self.fit_function(dflood, params, self.iFit)
+        f1 = self.fit_function(dflood+dh, params, self.iFit)
+        return np.where(dflood < 0, f0, f0 + (f1-f0) * (f0/(params[self.iFit,2,:] + params[self.iFit,3,:])))
 
 
     def __update_single_param(self, prange, scale_factor):
@@ -455,6 +477,9 @@ class SLRImpactModel:
 
         if self.dbg == 1: print('Initialising variables!')
 
+        if self.include_failing_protection and not self.include_initial_fp:
+            sys.exit('Model not fixed to allow failing protection in setup that ignores initial dikes!')
+
         # First, randomize the uncertainty parameters, if this is activated.
         if self.randomize: self.__randomize_parameters()
 
@@ -505,18 +530,8 @@ class SLRImpactModel:
         # Also, if SLR is not 0 in the initial year, then this will also be > 0.
     
         # Calculation uses different fit functions, depending on the above question (logistic and logarithmic functions)
-        self.orig_susceptible_asset_fraction[:,0]  = self.fit_function(self.effective_flood_height[:,0], self.storm_suscept_params_assets, self.iFit)
-        self.orig_susceptible_people_fraction[:,0] = self.fit_function(self.effective_flood_height[:,0], self.storm_suscept_params_people, self.iFit)
-        self.orig_exposed_asset_fraction[:,0]      = self.fit_function(self.effective_flood_height[:,0], self.storm_exposure_params_assets, self.iFit)
-        self.orig_exposed_people_fraction[:,0]     = self.fit_function(self.effective_flood_height[:,0], self.storm_exposure_params_people, self.iFit)
-
-        self.inundated_original_asset_fraction[:,0]  = self.fit_function(self.effective_flood_height[:,0], self.inund_params_assets, self.iFit)
-        self.inundated_original_people_fraction[:,0] = self.fit_function(self.effective_flood_height[:,0], self.inund_params_people, self.iFit)
-        self.inundated_area[:,0]                     = self.fit_function(self.effective_flood_height[:,0], self.inund_params_area, self.iFit)
-
-        self.retreated_original_asset_fraction[:,0]  = self.fit_function(self.effective_flood_height[:,0], self.inund_params_assets, self.iFit)
-        self.retreated_original_people_fraction[:,0] = self.fit_function(self.effective_flood_height[:,0], self.inund_params_people, self.iFit)
-
+        for iparam, params in enumerate(self.parameters):
+            self.variables[iparam][:,0] = self.fit_function(self.effective_flood_height[:,0], params, self.iFit)
 
         # Check if given willingness_to_invest variable is time dependent variable with correct length or a scalar
         if not isinstance(self.willingness_to_invest_in_fp, (list, np.ndarray)):
@@ -644,7 +659,10 @@ class SLRImpactModel:
             expected_effective_flood_height = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i] \
                                             - self.potential_fp_height_increase_over_50_years[:,i]
 
-            expected_susceptible_fraction = self.fit_function(expected_effective_flood_height, self.storm_suscept_params_people, self.iFit)
+            # including the possibility that raised dikes are breached
+            if self.include_failing_protection: dh = self.average_fp_height[:,i] + self.potential_fp_height_increase_over_50_years[:,i] - self.average_fp_height[:,0]
+            else: dh = 0.0
+            expected_susceptible_fraction = self.__calc_fitted_variable(expected_effective_flood_height, dh, self.storm_suscept_params_people)
 
             retreating_people_fraction = (self.willingness_to_retreat[:,i] / self.proactive_retreat_time_scale) \
                     *  np.maximum(0, expected_susceptible_fraction - total_removed_fraction)
@@ -730,7 +748,11 @@ class SLRImpactModel:
             expected_effective_flood_height = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i] \
                                             - self.potential_fp_height_increase_over_50_years[:,i]
 
-            expected_susceptible_fraction = self.fit_function(expected_effective_flood_height, self.storm_suscept_params_assets, self.iFit)
+            # including the possibility that raised dikes are breached
+            if self.include_failing_protection: dh = self.average_fp_height[:,i] + self.potential_fp_height_increase_over_50_years[:,i] - self.average_fp_height[:,0]
+            else: dh = 0.0
+            expected_susceptible_fraction = self.__calc_fitted_variable(expected_effective_flood_height, dh, self.storm_suscept_params_assets)
+
 
             retreating_asset_fraction = (self.willingness_to_retreat[:,i] / self.proactive_retreat_time_scale) \
                     * np.maximum(0, expected_susceptible_fraction - total_removed_fraction)
@@ -868,21 +890,21 @@ class SLRImpactModel:
         self.effective_flood_height[:,i+1] = (self.SLR[:,i+1]-self.SLR[:,0]) - (self.average_fp_height[:,i+1] - self.average_fp_height[:,0])
         
         # Update the susceptible and inundated theoretical fractions for the next time step, based on the updated net flood height
-        dflood = self.effective_flood_height
+        dflood = self.effective_flood_height[:,i+1]
+        if self.include_failing_protection:  dh = self.average_fp_height[:,i+1] - self.average_fp_height[:,0]
+        else: dh = 0
 
-        self.orig_susceptible_asset_fraction[:,i+1]  = self.fit_function(dflood[:,i+1], self.storm_suscept_params_assets, self.iFit)
-        self.orig_susceptible_people_fraction[:,i+1] = self.fit_function(dflood[:,i+1], self.storm_suscept_params_people, self.iFit)
-        self.orig_exposed_asset_fraction[:,i+1]      = self.fit_function(dflood[:,i+1], self.storm_exposure_params_assets, self.iFit)
-        self.orig_exposed_people_fraction[:,i+1]     = self.fit_function(dflood[:,i+1], self.storm_exposure_params_people, self.iFit)
+        for iparam, param in enumerate(self.parameters):
+            f = self.__calc_fitted_variable(dflood,dh,param)
 
-        self.inundated_original_asset_fraction[:,i+1] = np.maximum(self.inundated_original_asset_fraction[:,i], 
-                                                                   self.fit_function(dflood[:,i+1], self.inund_params_assets, self.iFit))
-        self.inundated_original_people_fraction[:,i+1] = np.maximum(self.inundated_original_people_fraction[:,i],
-                                                                    self.fit_function(dflood[:,i+1], self.inund_params_people, self.iFit))
-        self.inundated_area[:,i+1] = np.maximum(self.inundated_area[:,i], self.fit_function(dflood[:,i+1], self.inund_params_area, self.iFit))
+            # Do not allow that inundated areas become protected again (iparam <3). Susceptibilities and annual exposure can reduce again.
+            if iparam < 3:
+                self.variables[iparam][:,i+1] = np.maximum(self.variables[iparam][:,i], f)
+            else: 
+                self.variables[iparam][:,i+1] = f
 
         # To get the abandoned area during retreat, we first calculate the effective retreat height using the asset inundation without
-        # initial flood protection (the inverse of the log function used to calculate inundated assets in this case)
+        # initial flood protection (the inverse of the log function used to calculate inundated assets in this case).
         self.effective_retreat_height[:,i] = self.inverse_fit_function(self.retreated_original_asset_fraction[:,i], self.inund_params_assets, 1)
         self.abandoned_area[:,i+1] = np.maximum(self.abandoned_area[:,i], 
                                                 self.fit_function(self.effective_retreat_height[:,i],self.inund_params_area, 1))
