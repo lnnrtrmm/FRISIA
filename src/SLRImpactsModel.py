@@ -100,7 +100,9 @@ class SLRImpactModel:
         self.asset_feedback_switch = 0.0 # [0,1] Do storm damages reduce the value of coastal assets?
         self.people_feedback_switch = 0.0 # [0,1] Do storm fatalities reduce the coastal population?
 
-        ### Switches to make model reproduce CIAM output (if all following switches == False)
+        # Will protection or retreat be against current SLR or against SLR in 50 years?
+        self.include_foresight_in_adaptation = True
+
         # Include reduced investment in coastal zones in case there will be increased flood heights in the future?
         self.include_reduced_growth = False
         # Include the possibility that assets are moved from unsafe to safe coastal zones (if above param is True)
@@ -326,7 +328,7 @@ class SLRImpactModel:
             
             self.variables = [self.inundated_area, self.inundated_original_asset_fraction, self.inundated_original_people_fraction,
                               self.orig_susceptible_asset_fraction, self.orig_susceptible_people_fraction, self.orig_exposed_asset_fraction,
-                              self.orig_exposed_asset_fraction]
+                              self.orig_exposed_people_fraction]
             self.parameters = [self.inund_params_area, self.inund_params_assets, self.inund_params_people, self.storm_suscept_params_assets, 
                           self.storm_suscept_params_people, self.storm_exposure_params_assets, self.storm_exposure_params_people]
             filenames_extensions = ['inund_params_area', 'inund_params_assets', 'inund_params_people', 'storm_suscept_params_assets',
@@ -589,7 +591,8 @@ class SLRImpactModel:
 
         ### HOW MUCH INVESTMENT?
         # Current net flood height + expected SLR is missing protection
-        missing_protection = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i]
+        if self.include_foresight_in_adaptation: missing_protection = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i]
+        else: missing_protection = self.effective_flood_height[:,i]
         desired_protection = missing_protection * self.willingness_to_invest_in_fp[:,i]
 
         cost_of_reaching_desired_protection = np.maximum(0, self.construction_cost[:,i] * self.total_fp_length * \
@@ -654,10 +657,12 @@ class SLRImpactModel:
                 # update removed fraction for calculation of proactive retreat
                 total_removed_fraction = np.maximum(self.inundated_original_people_fraction[:,i], self.retreated_original_people_fraction[:,i-1])
 
-
-            # what is the flood height in 50 years?
-            expected_effective_flood_height = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i] \
-                                            - self.potential_fp_height_increase_over_50_years[:,i]
+            if self.include_foresight_in_adaptation:
+                # what is the flood height in 50 years?
+                expected_effective_flood_height = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i] \
+                                                - self.potential_fp_height_increase_over_50_years[:,i]
+            else:
+                expected_effective_flood_height = self.effective_flood_height[:,i]
 
             # including the possibility that raised dikes are breached
             if self.include_failing_protection: dh = self.average_fp_height[:,i] + self.potential_fp_height_increase_over_50_years[:,i] - self.average_fp_height[:,0]
@@ -744,9 +749,12 @@ class SLRImpactModel:
                 total_removed_fraction = np.maximum(self.inundated_original_asset_fraction[:,i], self.retreated_original_asset_fraction[:,i-1])
 
 
-            # what is the flood height in 50 years?
-            expected_effective_flood_height = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i] \
-                                            - self.potential_fp_height_increase_over_50_years[:,i]
+            if self.include_foresight_in_adaptation:
+                # what is the flood height in 50 years?
+                expected_effective_flood_height = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i] \
+                                                - self.potential_fp_height_increase_over_50_years[:,i]
+            else:
+                expected_effective_flood_height = self.effective_flood_height[:,i]
 
             # including the possibility that raised dikes are breached
             if self.include_failing_protection: dh = self.average_fp_height[:,i] + self.potential_fp_height_increase_over_50_years[:,i] - self.average_fp_height[:,0]
