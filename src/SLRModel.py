@@ -5,76 +5,16 @@ import sys
 
 class globalSLRModel:
     '''This is a model to calculate global SLR based on the contributions from five components.
-    Input to this model are only the global mean surface air temperature anomaly and ocean heat content changes.
-
-    This is based on a variety of different models (see description of individual components).
-
-    References:
-    Perette et al. (2013): "A scaling approach to project regional sea level rise and its uncertainties"
-    Marti et al. (2022)
-    Levitus et al. (2012)
-    Church et al. (2011)
-    Wong et al. (2017) (BRICKv0.3 / mimiBRICK)
-    Fox-Kemper et al. (2021) (IPCC report, Chapter 9)
-    Nauels et al. (2017) (MAGICC6)
-    Li et al. (2020)
-    Wigley and Raper (2005)
-    Shaffer et al. (2014)
-
-    ##########################################################
-    #### Thermosteric SLR as a function of ocean energy input
-    ##########################################################
-    Thermosteric SLR follows ocean heat content changes
-    approximately linearly with rate factor r (m/YJ) (r is "EEH" in paper)
-    Use here r=0.105 because of large possible range of values
-    and because it fits best with IPCC estimates.
-    Reference values are:
-    0.145 (Marti et al.2022)
-    0.12 (Levitus et al., 2012)
-    0.15 (Church et al., 2011)
-    0.105 (BRICK v0.3)
-    0.1199 from IPCC estimates
-    0.115 from MPIESM fit
-    0.0975 from fitting OBS data of OHC to thermoSLR
-
-    ##########################################################
-    ##### SLR from Mountain glaciers #########################
-    ##########################################################
-    Calculating the mountain glacier component as in Perrette et al. (2013)
-
-    ##########################################################
-    ##### SLR from land water storage change #################
-    ##########################################################
-    Very little data exist. This here is just a very simple
-    first implementation taken over from BRICKv0.3 (Wong, 2017).
-    -> BRICK just describes a linear increase with some 
-       random fluctuations (which only starts in year 2000)
-
-    New alternative:
-    Assume linear relationship between SLR_LWS rate and population.
-
-    ##########################################################
-    ##### SLR from Greenland Ice Sheet #######################
-    ##########################################################
-    Calculation as in MAGICC6 (Nauels, 2017).
-    Implementation separates the two components and adds them together.
-    In the discharge component we have a choice between a low and
-    a high discharge scenario, default is high, because it
-    seems to fit better with observational data.
-
-    ##########################################################
-    ##### SLR from Antarctic Ice Sheet #######################
-    ##########################################################
-    Calculation of Antarctic ice sheet volume based on the implementation in BRICK (Wong et al., 2017).
-    This employs the DAIS model (Shaffer, 2014)
+    Required input to this model are only the global mean surface air temperature anomaly and ocean heat content changes.
+    Global population is an optional input parameter.
     '''
 
-    def __init__(self, T, OHC_change, population=[-999], sy=1750, ey=2300, dt=1.0, dbg=0, include_MICI=False, randomize=False):
+    def __init__(self, T, OHC_change, population=[-999], sy=1750, ey=2300, dt=1.0, dbg=0, include_tipping=False, randomize=False):
 
         ########## Set some global variables ################
         self.T_anomaly = T
         self.OHC_change = OHC_change
-        self.include_MICI = include_MICI
+        self.include_tipping = include_tipping
         self.randomize = randomize
         
         if population[0] == -999:
@@ -124,7 +64,7 @@ class globalSLRModel:
         # Vary all parameters that are differing between the low and high discharge versions of MAGICC
         self.GIS_rho_range = (1.0e-4, 5.0e-4)
         self.GIS_v_range = (0.5e-4, 2.0e-4)
-        # implement MICI also for GrIS (like for AntIS, but with GSAT anomaly not T_Ant as reference)
+        # implement tipping also for GrIS (like for AntIS, but with GSAT anomaly not T_Ant as reference)
         self.GIS_disintegration_rate_range = (0.001, 0.01)
         self.GIS_T_crit_range = (4,2.5) # Note lower number at 2nd position, as lower T_crit induces more melting
 
@@ -281,7 +221,7 @@ class globalSLRModel:
         self.AIS_T_crit = self.__scale_single_param(self.AIS_T_crit_range, self.AIS_scale_factor)
         self.AIS_disintegration_rate = self.__scale_single_param(self.AIS_disintegration_rate_range, self.AIS_scale_factor)
 
-        if not self.include_MICI:
+        if not self.include_tipping:
             self.AIS_T_crit = 999.
             self.GIS_T_crit = 999.
         return
@@ -489,12 +429,12 @@ class globalSLRModel:
         return
 
 
-    def getSLRTotal(self):    return self.SLR_total
-    def getSLRThermo(self):    return self.SLR_thermo
-    def getSLRLWS(self):    return self.SLR_LWS
-    def getSLRMG(self):    return self.SLR_MG
-    def getSLRGIS(self):    return self.SLR_GIS
-    def getSLRAIS(self):    return self.SLR_AIS
-    def getTime(self):         return self.time
-    def getTanomaly(self):     return self.T_anomaly
-    def getOHCchange(self):     return self.OHC_change
+    def getSLRTotal(self):     return np.copy(self.SLR_total)
+    def getSLRThermo(self):    return np.copy(self.SLR_thermo)
+    def getSLRLWS(self):       return np.copy(self.SLR_LWS)
+    def getSLRMG(self):        return np.copy(self.SLR_MG)
+    def getSLRGIS(self):       return np.copy(self.SLR_GIS)
+    def getSLRAIS(self):       return np.copy(self.SLR_AIS)
+    def getTime(self):         return np.copy(self.time)
+    def getTanomaly(self):     return np.copy(self.T_anomaly)
+    def getOHCchange(self):    return np.copy(self.OHC_change)
