@@ -31,15 +31,15 @@ SLRModel.integrate()                                                            
 SLRModel.align(2010)                                                                # Shift the SLR components to be 0 in 2010.
 ```
 
-In the simplest possible setup, the inputs are one-dimensional arrays covering time from the start to the end year. Now, the total SLR and the individual components are available via
+The inputs to the model should be one-dimensional arrays covering time from the start to the end year. Now, the total SLR and the individual components are available via
 
 ```python
-SLR_total = SLRModel.getSLRTotal()
+SLR_total  = SLRModel.getSLRTotal()
 SLR_thermo = SLRModel.getSLRThermo()
-SLR_MG = SLRModel.getSLRMG()
-SLR_LWS = SLRModel.getSLRLWS()
-SLR_GIS = SLRModel.getSLRGIS()
-SLR_AIS = SLRModel.getSLRAIS()
+SLR_MG     = SLRModel.getSLRMG()
+SLR_LWS    = SLRModel.getSLRLWS()
+SLR_GIS    = SLRModel.getSLRGIS()
+SLR_AIS    = SLRModel.getSLRAIS()
 ```
 
 If we wanted to add the possibility of higher rates of sea level at certain levels of warming ("tipping behaviour"), we can create the instance of the SLRModel with the ```include_tipping=True``` option in the call to create the instance.
@@ -47,8 +47,9 @@ If we wanted to add the possibility of higher rates of sea level at certain leve
 #### Running the impacts and adaptation model
 The typical way to run the FRISIA impact and adaptation model is the following call:
 
-```
-Model = SLRImpactModel(SLR, T, CO2emis, coastal_pop, coastal_gdp, ey=2200, ndim=1, version='DIVA_global',
+```python
+Model = SLRImpactModel(SLR, T, CO2emis, coastal_pop, coastal_gdp,
+                       ey=2200, ndim=1, version='DIVA_global',
 		       include_SLR_components=True, SLR_components=SLR_components)
 Model.integrate()
 ```
@@ -60,8 +61,8 @@ Please take into account:
 - the input timeseries for SLR, T and CO2emis have to be one-dimensional arrays of the global mean values that cover exactly the range over which the model integrates (e.g. here 191 timesteps from 2010 to 2200).
 - SLR should be given as an anomaly since the start year, whereas T is the anomaly with respect to the pre-industrial mean (1850-1900). CO2emis are fossil emissions of CO2 in units of Gt C per year.
 - the input timeseries for coastal population and coastal GDP have to be two-dimensional arrays, where the first dimension is the number of coastal regions (n=1 in this example) and the second dimension is time. These inputs are available from the input folder for the different default aggregation types coming with FRISIA. Have a look at the EXAMPLE script on how to load these.
-- Currently allowed aggregation types are "DIVA_global" (ndim=1), "DIVA_bipolar(ndim=2)" and "DIVA_regional(ndim=7)" (see Ramme et al., 2025), with the respective inputs available here. If new aggregation types are added, these also require the pre-processed inputs to be generated.
-- We have activated the include_SLR_components option, which means that instead of using the global mean sea level rise (SLR) to calculate coastal SLR (scaled linearly with region-specific pre-processed factors), we use the individual components of SLR and regionally averaged wheights for pre-processed input files to create local SLR for each coastal region, which is slightly more precise and allows for a larger range of uncertainty if the components vary between runs.
+- Currently allowed aggregation types are `DIVA_global` (ndim=1), `DIVA_bipolar` (ndim=2) and `DIVA_regional` (ndim=7) (see Ramme et al., 2025), with the respective inputs available here. If new aggregation types are added, these also require the pre-processed inputs to be generated (see corresponding section below).
+- We have activated the `include_SLR_components` option, which means that instead of using the global mean sea level rise (SLR) to calculate coastal SLR (scaled linearly with region-specific pre-processed factors), we use the individual components of SLR and regionally averaged wheights for pre-processed input files to create local SLR for each coastal region, which is slightly more precise and allows for a larger range of uncertainty if the components vary between runs.
 
 Output can be used from the model by either referring to the respective variable of the model directly
 
@@ -77,13 +78,14 @@ Nflooded_total = SLRImpactModel.getTotalPeopleFlooded()
 
 Currently available output functions can be found at the end of the model source code.
 
-#### Vary the uncertainty parameters
+#### Varying the uncertainty parameters
 
-So far we have used the default values for each parameter within FRISIA. However, most parameters have a range of possible values. To maximize on the capabilities of FRISIA to provide ranges of possible outputs, one would normally vary all the uncertainty parameters independently and create an ensemble of runs. The ensemble should then ideally also cover uncertainty over the inputs, most importantly for the temperature time series. A typical call for this type of analysis could look like this:
+So far we have used the default values for each parameter within FRISIA. However, most parameters have a range of possible values. To maximize on the capabilities of FRISIA to provide ranges of possible outputs, one would normally vary all the uncertainty parameters independently and create an ensemble of runs. The ensemble should then ideally also cover uncertainty over the inputs, most importantly for the temperature time series. In the example below T and OHC_change are now 2-dimensions arrays with the first dimension being time and the second dimension being the ensemble member:
 
 ```python
 # creating the SLRModel instance once with activated randomize option is enough 
 SLRModel = globalSLRModel(T[:,0], OHC_change[0,:], population=population, sy=1850, ey=2200, randomize=True)
+
 for i in range(N):
     SLRModel.T_anomaly = T[:,i]
     SLRModel.OHC_change = OHC_change[:,i]
@@ -137,19 +139,19 @@ after creating the model instance, but before calling ```Model.integrate()```. A
 Model.willingness_to_retreat = 1.0
 ```
 
-In FRISIA version 1.0 we advise the user to not set both options at the same time, because this will lead to unrealistic costs as coastal regions build protection and retreat at the same time. Future versions of the model will allow the possibility to include time-dependent changes in adaptation and hybrid adaptation strategies.
+In FRISIA version 1.0 we advise the user to not set both options at the same time, because this will lead to unrealistic costs as coastal regions would retreat and build protection at the same time. Future versions of the model are planned, which will allow to include time-dependent changes in adaptation and hybrid adaptation strategies.
 
 #### Activate additional feedback
 
 The default settings of FRISIA v1.0 are to turn off the additional feedback implemented in FRISIA compared to CIAM, to make model results comparable. Additional feedback can be activated by setting the following model switches after creating the model instance, but before integrating the model.
 
-- ```Model.asset_feedback_switch = 1.0``` : This will allow storm surge damages to reduce coastal asset values.
-- ```Model.people_feedback_switch = 1.0``` : This will allow storm surge fatalities to reduce coastal population.
-- ```Model.include_reduced_growth = True``` : This will include the feedback that coastal assets grow slower as there is an increase in expected exposure to storm surges under SLR.
-- ```Model.include_fp_investment_cap = True``` : This will limit the annual amount of money available for flood protection expanses (including maintenance costs) to a fraction of coastal GDP.
-- ```Model.include_GDP_effect = True``` : This will allow reductions in coastal assets and populations from the feedbacks above to impact also coastal GDP and GDP per capita, which has secondary effect like storm surge resilience and money available for flood protection.
-- ```` Model.include_retreat_exposure_reduction = True``` : This will let the retreat of assets or people reduce the annual exposure to storm surges.
-- ``` Model.include_initial_fp = False``` : This is for counterfactual scenarios in which the initial flood protection height that is taken from the DIVA dataset is set to 0 (default is True, i.e. the inital value from DIVA is used)
+- ```Model.asset_feedback_switch = 1.0```: This will allow storm surge damages to reduce coastal asset values.
+- ```Model.people_feedback_switch = 1.0```: This will allow storm surge fatalities to reduce coastal population.
+- ```Model.include_reduced_growth = True```: This will include the feedback that coastal assets grow slower as there is an increase in expected exposure to storm surges under SLR.
+- ```Model.include_fp_investment_cap = True```: This will limit the amount of money annually available for flood protection expanses (including maintenance costs) to a fraction of coastal GDP.
+- ```Model.include_GDP_effect = True```: This will allow reductions in coastal assets and populations from the feedbacks above to impact also coastal GDP and GDP per capita, which has secondary effect like storm surge resilience and money available for flood protection.
+- ``` Model.include_retreat_exposure_reduction = True```: This will let the retreat of assets or people reduce the annual exposure to storm surges.
+- ``` Model.include_initial_fp = False```: This is for counterfactual scenarios in which the initial flood protection height that is taken from the DIVA dataset is set to 0 (default is True, i.e. the inital value from DIVA is used)
 
 
 ## Creating new aggregation level
@@ -159,7 +161,7 @@ Note that running this notebook exactly as it is will overwrite the input files 
 
 
 ## Coupling of FRISIA to FRIDA
-FRISIA is coupled to the [FRIDA model](https://github.com/metno/WorldTransFRIDA) in its "DIVA_bipolar" aggregation type. The coupled version has all the additional feedbacks activated. The coupling was done as a complete reimplementation of FRISIA in Stella Architect, the modelling language of FRIDA. The version used in FRIDA v2.1 is FRISIA v1.0. FRIDA will not be continuously updated with newer versions of FRISIA, only large updates thar affect the feedback to other components of FRIDA are done.
+FRISIA is coupled to the [FRIDA model](https://github.com/metno/WorldTransFRIDA) in its "DIVA_bipolar" aggregation type. The coupled version has all the additional feedbacks activated. The coupling was done as a complete reimplementation of FRISIA in Stella Architect, the modelling language of FRIDA. The version used in FRIDA v2.1 is FRISIA v1.0. FRIDA will not be continuously updated with newer versions of FRISIA. Only larger updates that affect the feedback to other components of FRIDA will be made.
 
 
 ## Model description
@@ -194,7 +196,7 @@ We calculate this component as in Perette et al. (2013), with calibrated paramet
 Calculation as in MAGICC6 (Nauels, 2017), with recalibrated parameters and uncertainty ranges.
 
 #### Antarctic ice sheet
-Caclulation as in BRICK (Wong et al., 2017), which employs the DAIS model (Shaffer, 2014).
+Caclulation as in BRICK (Wong et al., 2017), which employs the DAIS model (Shaffer, 2014), and with recalibrated parameters and uncertainty ranges.
 
 
 ### FRISIA impacts and adaptation module
