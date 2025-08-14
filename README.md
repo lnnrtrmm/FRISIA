@@ -20,7 +20,14 @@ python EXAMPLE_runFRISIA.py
 ## User manual
 
 ### Running the model
-Here you find instructions for a set of experiments one might want to conduct with FRISIA.
+Here you find instructions for a set of experiments one might want to conduct with FRISIA. You can also find simple examples for running FRISIA in this repository:
+
+```
+EXAMPLE_calculateSLR.py
+EXAMPLE_runFRISIA.py
+```
+
+A more detailed analysis can be found in [this data repository](https://doi.org/10.5281/zenodo.15249065) on Zenodo.
 
 #### Creating time series of sea level rise
 The first step to running FRISIA is to generate time series of sea level rise. Here we do this using the example input from FaIR that come with the FRISIA reository. For more info on loading the input data have a look at EXAMPLE scripts.
