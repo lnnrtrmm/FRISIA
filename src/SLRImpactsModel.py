@@ -90,6 +90,7 @@ class SLRImpactModel:
 
         # Include maximum available money for flood protection as fraction of GDP?
         self.include_fp_investment_cap = False
+        self.include_initial_fp_for_money_availability = False
 
         # Include the possibility that raised flood protection is breached (i.e. protection is raised, but SLR is even faster)
         self.include_failing_protection = False
@@ -588,8 +589,14 @@ class SLRImpactModel:
         cost_of_reaching_desired_protection = np.maximum(0, self.construction_cost[:,i] * self.total_fp_length * \
                     (( desired_protection + self.average_fp_height[:,i])**2 - self.average_fp_height[:,i]**2) )
     
+        if self.include_initial_fp_for_money_availability:
+            maintenance_cost = self.annual_costs_of_fp_maintenance[:,i]
+        else:
+            maintenance_cost =  self.annual_costs_of_fp_maintenance[:,i] - self.annual_costs_of_fp_maintenance_noadapt[:,i]
+
+
         maximum_money_available_for_fp = np.maximum(0, self.coastal_GDP[:,i] * self.maximum_gdp_fraction_for_fp_investment \
-                                            - self.annual_costs_of_fp_maintenance[:,i] )
+                                            - maintenance_cost)
 
             
         if self.include_fp_investment_cap:
