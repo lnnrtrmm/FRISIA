@@ -129,6 +129,7 @@ class SLRImpactModel:
         # which are based on CIAM values (if possible).
         #
         # Watch out: every new uncertainty parameter has to also be added to the randomisation routine
+        #            and the input & output routines of the uncertainty parameters
 
         #### Coastal population and asset evolution parameters
         # Flood fatalities as feedback from storm surges to population stock and for output
@@ -143,6 +144,12 @@ class SLRImpactModel:
         # This is used to calibrate to CIAM output
         self.flood_event_damage_fraction = 0.3         # dmnl
         self.flood_event_damage_fraction_range = (0.2, 0.4)
+
+        # Determines how fast susceptibility is reduced under retreat
+        # A value of 1 means that all generally susceptible assets/people are equally likely to retreat.
+        # A higher value means that those that are more likely to be exposed will preferably retreat.
+        self.susceptibility_reduction_exponent = 2.0
+        self.susceptibility_reduction_exponent_range = (1.0, 3.0)   # dmnl
 
         # Calibration parameter for reduced investment in unprotected coastal zones
         self.effective_flood_height_at_which_investment_is_halved = 1.0                   # m
@@ -424,6 +431,7 @@ class SLRImpactModel:
         self.not_depreciated_fraction_of_assets_at_time_of_retreat = self. __update_single_param(self.not_depreciated_fraction_of_assets_at_time_of_retreat_range, np.random.rand())
         self.increase_factor_for_costs_of_reactive_retreat = self. __update_single_param(self.increase_factor_for_costs_of_reactive_retreat_range, np.random.rand())
         self.proactive_retreat_time_scale = self. __update_single_param(self.proactive_retreat_time_scale_range, np.random.rand())
+        self.susceptibility_reduction_exponent = self. __update_single_param(self.susceptibility_reduction_exponent_range, np.random.rand())
         return
 
     def getUncertaintyParameters(self):
@@ -445,7 +453,8 @@ class SLRImpactModel:
                 np.copy(self.asset_demolition_cost_factor),
                 np.copy(self.not_depreciated_fraction_of_assets_at_time_of_retreat),
                 np.copy(self.increase_factor_for_costs_of_reactive_retreat),
-                np.copy(self.proactive_retreat_time_scale)
+                np.copy(self.proactive_retreat_time_scale),
+                np.copy(self.susceptibility_reduction_exponent)
             ]
         return uncertaintyParameters
 
@@ -469,6 +478,7 @@ class SLRImpactModel:
         self.not_depreciated_fraction_of_assets_at_time_of_retreat  = InputParameters[15]
         self.increase_factor_for_costs_of_reactive_retreat          = InputParameters[16]
         self.proactive_retreat_time_scale                           = InputParameters[17]
+        self.susceptibility_reduction_exponent                      = InputParameters[18]
 
         return
 
@@ -644,7 +654,8 @@ class SLRImpactModel:
             #  1. Reactive retreat in response to inundation, which has very high costs.
             #  2. Proactive retreat in response to expected inundation in 50 years, which has much lower costs.
         
-            # Reactive retreat (and hence flood damage) only after first timestep, because it is in response to SLR from one time step to the next
+            #### Reactive retreat ###################################################################
+            # only after first timestep, because it is in response to SLR from one time step to the next
             if i==0: 
                 self.annual_reactive_people_retreat[:,i] = 0.0
                 total_removed_fraction = self.inundated_original_people_fraction[:,0] # use the initialisation value in first timestep         
@@ -657,6 +668,24 @@ class SLRImpactModel:
                 # update removed fraction for calculation of proactive retreat
                 total_removed_fraction = np.maximum(self.inundated_original_people_fraction[:,i], self.retreated_original_people_fraction[:,i-1])
 
+
+            # Update the susceptible fraction based on previous retreat
+            # Storm damage to people is depending on what is the actually susceptible fraction of people. 
+            # This has to account for the fraction of people that is generally susceptible and the fraction
+            # of people that has already been removed from the coast (via inundation or retreat)
+            actually_susceptible_people_fraction = np.maximum(0, (self.orig_susceptible_people_fraction[:,i] - total_removed_fraction) \
+                                                     / (1.0 - total_removed_fraction))
+
+            if self.include_retreat_exposure_reduction:
+                exposure_reduction = np.where(self.orig_susceptible_people_fraction[:,i] == 0, 0, 
+                        (actually_susceptible_people_fraction/self.orig_susceptible_people_fraction[:,i])**self.susceptibility_reduction_exponent)
+            else: exposure_reduction = 1.0
+
+
+
+            #### Proactive retreat #####################################################################
+            # If this strategy is chosen, this will lead to additional retreat as long as there is (now or expected in 50 years)
+            # an increase of the annual exposure compared to the initial state.
             if self.include_foresight_in_adaptation:
                 # what is the flood height in 50 years?
                 expected_effective_flood_height = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i] \
@@ -665,12 +694,17 @@ class SLRImpactModel:
                 expected_effective_flood_height = self.effective_flood_height[:,i]
 
             # including the possibility that raised dikes are breached
-            if self.include_failing_protection: dh = self.average_fp_height[:,i] + self.potential_fp_height_increase_over_50_years[:,i] - self.average_fp_height[:,0]
-            else: dh = 0.0
-            expected_susceptible_fraction = self.__calc_fitted_variable(expected_effective_flood_height, dh, self.storm_suscept_params_people)
+            if self.include_failing_protection: 
+                dh = self.average_fp_height[:,i] + self.potential_fp_height_increase_over_50_years[:,i] - self.average_fp_height[:,0]
+            else: 
+                dh = 0.0
+
+            # Expected exposure fraction of original distribution times the reduction factor to account for previous retreat
+            expected_exposed_fraction = self.__calc_fitted_variable(expected_effective_flood_height, dh, self.storm_exposure_params_people) \
+                                        * exposure_reduction
 
             retreating_people_fraction = (self.willingness_to_retreat[:,i] / self.proactive_retreat_time_scale) \
-                    *  np.maximum(0, expected_susceptible_fraction - total_removed_fraction)
+                    *  np.maximum(0, expected_exposed_fraction - self.orig_exposed_people_fraction[:,0])
 
             if i==0: self.retreated_original_people_fraction[:,i] = self.retreated_original_people_fraction[:,0] + retreating_people_fraction
             else: self.retreated_original_people_fraction[:,i] = self.retreated_original_people_fraction[:,i-1] + retreating_people_fraction
@@ -685,22 +719,19 @@ class SLRImpactModel:
             #### Number of people flooded in storms and flood fatalities
             ####
             ########################################################################################## 
-
-            # Storm damage to people is depending on what is the actually susceptible fraction of people. 
-            # This has to account for the fraction of people that is generally susceptible and the fraction
-            # of people that has already been removed from the coast (via inundation or retreat)
+            # Update the susceptible fraction again
             total_removed_fraction = np.maximum(self.inundated_original_people_fraction[:,i], self.retreated_original_people_fraction[:,i])
             actually_susceptible_people_fraction = np.maximum(0, (self.orig_susceptible_people_fraction[:,i] - total_removed_fraction) \
                                                      / (1.0 - total_removed_fraction))
 
             if self.include_retreat_exposure_reduction:
-                people_exposure_reduction_because_of_retreat = actually_susceptible_people_fraction/self.orig_susceptible_people_fraction[:,i]
-            else:
-                people_exposure_reduction_because_of_retreat = 1.0
+                exposure_reduction = np.where(self.orig_susceptible_people_fraction[:,i] == 0, 0, 
+                        (actually_susceptible_people_fraction/self.orig_susceptible_people_fraction[:,i])**self.susceptibility_reduction_exponent)
+            else: exposure_reduction = 1.0       
 
             # Subtract here the initial exposure fraction from current exposure fraction to get the SLR driven number
-            self.annual_people_flooded[:,i] = self.coastal_population[:,i] * people_exposure_reduction_because_of_retreat \
-                                              * np.maximum(0.0, self.orig_exposed_people_fraction[:,i] - self.orig_exposed_people_fraction[:,0])
+            self.annual_people_flooded[:,i] = self.coastal_population[:,i] * np.maximum(0.0, 
+                    self.orig_exposed_people_fraction[:,i] * exposure_reduction - self.orig_exposed_people_fraction[:,0])
 
             self.annual_flood_fatalities[:,i] = self.flood_event_fatality_rate * (1.0 - self.storm_damage_resilience[:,i]) \
                     * self.annual_people_flooded[:,i]
@@ -736,7 +767,8 @@ class SLRImpactModel:
             #  1. Reactive retreat in response to inundation, which has very high costs.
             #  2. Proactive retreat in response to expected inundation in 50 years, which has much lower costs.
 
-            # Reactive retreat (and hence flood damage) only after first timestep, because it is in response to SLR from one time step to the next
+            #### Reactive retreat ####################################################################
+            # only after first timestep, because it is in response to SLR from one time step to the next
             if i==0: 
                 self.annual_reactive_asset_retreat[:,i] = 0.0
                 total_removed_fraction = self.inundated_original_asset_fraction[:,0] # use the initialisation value in first timestep
@@ -749,6 +781,22 @@ class SLRImpactModel:
                 total_removed_fraction = np.maximum(self.inundated_original_asset_fraction[:,i], self.retreated_original_asset_fraction[:,i-1])
 
 
+            # Update the susceptible fraction based on previous retreat
+            # Storm damage to people is depending on what is the actually susceptible fraction of people. 
+            # This has to account for the fraction of people that is generally susceptible and the fraction
+            # of people that has already been removed from the coast (via inundation or retreat)
+            actually_susceptible_asset_fraction = np.maximum(0, (self.orig_susceptible_asset_fraction[:,i] - total_removed_fraction) \
+                                                     / (1.0 - total_removed_fraction))
+
+            if self.include_retreat_exposure_reduction:
+                exposure_reduction = np.where(self.orig_susceptible_asset_fraction[:,i] == 0, 0, 
+                        (actually_susceptible_asset_fraction/self.orig_susceptible_asset_fraction[:,i])**self.susceptibility_reduction_exponent)
+            else: exposure_reduction = 1.0
+
+
+            #### Proactive retreat #####################################################################
+            # If this strategy is chosen, this will lead to additional retreat as long as there is (now or expected in 50 years)
+            # an increase of the annual exposure compared to the initial state.
             if self.include_foresight_in_adaptation:
                 # what is the flood height in 50 years?
                 expected_effective_flood_height = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i] \
@@ -757,14 +805,17 @@ class SLRImpactModel:
                 expected_effective_flood_height = self.effective_flood_height[:,i]
 
             # including the possibility that raised dikes are breached
-            if self.include_failing_protection: dh = self.average_fp_height[:,i] + self.potential_fp_height_increase_over_50_years[:,i] - self.average_fp_height[:,0]
-            else: dh = 0.0
-            expected_susceptible_fraction = self.__calc_fitted_variable(expected_effective_flood_height, dh, self.storm_suscept_params_assets)
+            if self.include_failing_protection: 
+                dh = self.average_fp_height[:,i] + self.potential_fp_height_increase_over_50_years[:,i] - self.average_fp_height[:,0]
+            else: 
+                dh = 0.0
 
+            # Expected exposure fraction of original distribution times the reduction factor to account for previous retreat
+            expected_exposed_fraction = self.__calc_fitted_variable(expected_effective_flood_height, dh, self.storm_exposure_params_assets) \
+                                        * exposure_reduction
 
             retreating_asset_fraction = (self.willingness_to_retreat[:,i] / self.proactive_retreat_time_scale) \
-                    * np.maximum(0, expected_susceptible_fraction - total_removed_fraction)
-                                            
+                    *  np.maximum(0, expected_exposed_fraction - self.orig_exposed_asset_fraction[:,0])        
 
 
             if i==0: self.retreated_original_asset_fraction[:,i] = self.retreated_original_asset_fraction[:,0] + retreating_asset_fraction
@@ -790,14 +841,14 @@ class SLRImpactModel:
             actually_susceptible_asset_fraction = np.maximum(0, (self.orig_susceptible_asset_fraction[:,i] - total_removed_fraction)\
                                                                   / (1.0 - total_removed_fraction))
             if self.include_retreat_exposure_reduction:
-                asset_exposure_reduction_because_of_retreat = actually_susceptible_asset_fraction/self.orig_susceptible_asset_fraction[:,i]
-            else:
-                asset_exposure_reduction_because_of_retreat = 1.0
+                exposure_reduction = np.where(self.orig_susceptible_asset_fraction[:,i] == 0, 0, 
+                        (actually_susceptible_asset_fraction/self.orig_susceptible_asset_fraction[:,i])**self.susceptibility_reduction_exponent)
+            else: exposure_reduction = 1.0
             
             # Subtract here the initial exposure fraction from current exposure fraction to get the SLR driven number
-            self.annual_storm_damage_to_assets[:,i] = self.coastal_assets[:,i] * asset_exposure_reduction_because_of_retreat \
-                                              * self.flood_event_damage_fraction * (1.0 - self.storm_damage_resilience[:,i]) \
-                                              * np.maximum(0.0, self.orig_exposed_asset_fraction[:,i] - self.orig_exposed_asset_fraction[:,0])
+            self.annual_storm_damage_to_assets[:,i] = self.coastal_assets[:,i] *self.flood_event_damage_fraction \
+                                              * (1.0 - self.storm_damage_resilience[:,i]) * np.maximum(0.0, 
+                                              self.orig_exposed_asset_fraction[:,i] * exposure_reduction - self.orig_exposed_asset_fraction[:,0])
 
 
         ##########################################################################################
@@ -811,6 +862,9 @@ class SLRImpactModel:
 
         # Calculate likelihood of investment in coastal zone
         # -> Less growth if it is expected that net flood height will increase (or is already high)
+        expected_effective_flood_height = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i] \
+                                            - self.potential_fp_height_increase_over_50_years[:,i]
+        expected_susceptible_fraction = self.fit_function(expected_effective_flood_height, self.storm_suscept_params_assets, self.iFit)        
         if self.include_reduced_growth and self.damage:
             dflood =  np.maximum(0, self.expected_SLR_in_50_years[:,i] + self.effective_flood_height[:,i]\
                                      - self.potential_fp_height_increase_over_50_years[:,i])
