@@ -148,23 +148,31 @@ nens = 3
 ndim = 1 # global FRISIA setup
 
 
+#### Arrays for saving data from Model
+# No adapt run
+total_coastal_assets_no_adapt = np.zeros((nyears, nsce, nens))
+total_coastal_population_no_adapt = np.zeros((nyears, nsce, nens))
 
-##### No protection, no retreat ("No adaptation")
+total_relocation_cost_no_adapt = np.zeros((nyears, nsce, nens))
+total_flood_cost_no_adapt = np.zeros((nyears, nsce, nens))
+total_storm_cost_no_adapt = np.zeros((nyears, nsce, nens))
+total_opportunity_cost_no_adapt = np.zeros((nyears, nsce, nens))
 
-### CIAM comparison
-total_relocation_cost_global_no_adapt = np.zeros((nyears, nsce, nens))
-total_flood_cost_global_no_adapt = np.zeros((nyears, nsce, nens))
-total_storm_cost_global_no_adapt = np.zeros((nyears, nsce, nens))
-total_construct_cost_global_no_adapt = np.zeros((nyears, nsce, nens))
-total_people_flooded_global_no_adapt = np.zeros((nyears, nsce, nens))
-total_flood_fatalities_global_no_adapt = np.zeros((nyears, nsce, nens))
+total_people_flooded_no_adapt = np.zeros((nyears, nsce, nens))
+total_flood_fatalities_no_adapt = np.zeros((nyears, nsce, nens))
 
-total_relocation_cost_global_protect = np.zeros((nyears, nsce, nens))
-total_flood_cost_global_protect = np.zeros((nyears, nsce, nens))
-total_storm_cost_global_protect = np.zeros((nyears, nsce, nens))
-total_construct_cost_global_protect = np.zeros((nyears, nsce, nens))
-total_people_flooded_global_protect = np.zeros((nyears, nsce, nens))
-total_flood_fatalities_global_protect = np.zeros((nyears, nsce, nens))
+# Protect run
+total_coastal_assets_protect = np.zeros((nyears, nsce, nens))
+total_coastal_population_protect = np.zeros((nyears, nsce, nens))
+
+total_relocation_cost_protect = np.zeros((nyears, nsce, nens))
+total_flood_cost_protect = np.zeros((nyears, nsce, nens))
+total_storm_cost_protect = np.zeros((nyears, nsce, nens))
+total_opportunity_cost_protect = np.zeros((nyears, nsce, nens))
+total_protect_cost = np.zeros((nyears, nsce, nens))
+
+total_people_flooded_protect = np.zeros((nyears, nsce, nens))
+total_flood_fatalities_protect = np.zeros((nyears, nsce, nens))
 
 
 for sidx in range(3):
@@ -183,11 +191,16 @@ for sidx in range(3):
                 
         Model.integrate()  
         
-        total_relocation_cost_global_no_adapt[:,sidx,i] = Model.getTotalRelocationCost()
-        total_flood_cost_global_no_adapt[:,sidx,i] = Model.getTotalFloodCost()
-        total_storm_cost_global_no_adapt[:,sidx,i] = Model.getTotalStormCost()
-        total_people_flooded_global_no_adapt[:,sidx,i] = Model.getTotalPeopleFlooded()
-        total_flood_fatalities_global_no_adapt[:,sidx,i] = Model.getTotalFloodFatalities()
+        total_coastal_assets_no_adapt[:,sidx,i] = Model.getTotalCoastalAssets()
+        total_coastal_population_no_adapt[:,sidx,i] = Model.getTotalCoastalPopulation()
+
+        total_relocation_cost_no_adapt[:,sidx,i] = Model.getTotalRelocationCost()
+        total_flood_cost_no_adapt[:,sidx,i] = Model.getTotalFloodCost()
+        total_storm_cost_no_adapt[:,sidx,i] = Model.getTotalStormCost()
+        total_opportunity_cost_no_adapt[:,sidx,i] = Model.getTotalOpportunityCost()
+
+        total_people_flooded_no_adapt[:,sidx,i] = Model.getTotalPeopleFlooded()
+        total_flood_fatalities_no_adapt[:,sidx,i] = Model.getTotalFloodFatalities()
         
         
         ### Protect strategy
@@ -201,9 +214,79 @@ for sidx in range(3):
         Model.willingness_to_invest_in_fp = 1.0
                 
         Model.integrate()  
-        
-        total_relocation_cost_global_protect[:,sidx,i] = Model.getTotalRelocationCost()
-        total_flood_cost_global_protect[:,sidx,i] = Model.getTotalFloodCost()
-        total_storm_cost_global_protect[:,sidx,i] = Model.getTotalStormCost()
-        total_people_flooded_global_protect[:,sidx,i] = Model.getTotalPeopleFlooded()
-        total_flood_fatalities_global_protect[:,sidx,i] = Model.getTotalFloodFatalities()
+                
+        total_coastal_assets_protect[:,sidx,i] = Model.getTotalCoastalAssets()
+        total_coastal_population_protect[:,sidx,i] = Model.getTotalCoastalPopulation()
+
+        total_relocation_cost_protect[:,sidx,i] = Model.getTotalRelocationCost()
+        total_flood_cost_protect[:,sidx,i] = Model.getTotalFloodCost()
+        total_storm_cost_protect[:,sidx,i] = Model.getTotalStormCost()
+        total_protect_cost[:,sidx,i] = Model.getTotalNetConstructCost()
+        total_opportunity_cost_no_adapt[:,sidx,i] = Model.getTotalOpportunityCost()
+
+        total_people_flooded_protect[:,sidx,i] = Model.getTotalPeopleFlooded()
+        total_flood_fatalities_protect[:,sidx,i] = Model.getTotalFloodFatalities()
+
+
+
+#### Making an example figure
+# Note that this is only an example! Produced numbers have to be interpreted within the context of the model settings:
+# - this is only a global setup, i.e. the total coastline either does not adapt or protects as a whole 
+# - no addtional feedbacks are activated
+# - the only accounting of uncertainty is the three percentiles in the temperature timeseries. FRISIA parameters are not varied.
+# - the input data for population and GDP prescribe near-constant values after 2100
+# - SSP5-8.5 is used for illustrative purposes, but it is arguably a too extreme scenario of global warming
+
+isc=2 # use only SSP5-8.5
+
+
+total_cost_no_adapt = total_relocation_cost_no_adapt + total_flood_cost_no_adapt + total_storm_cost_no_adapt + total_opportunity_cost_no_adapt
+total_cost_protect = total_relocation_cost_protect + total_flood_cost_protect +total_protect_cost + total_storm_cost_protect + total_opportunity_cost_protect
+
+data_assets = [total_coastal_assets_no_adapt, total_coastal_assets_protect]
+data_costs = [total_cost_no_adapt, total_cost_protect]
+data_flooded = [total_people_flooded_no_adapt, total_people_flooded_protect]
+
+
+labels_dat = ['no adaptation', 'protect']
+
+colors_dat = ['tab:red', 'tab:blue']
+
+ylabels = ['asset values (trillion \$)', 'total SLR costs (b\$ yr$^{-1}$)', 'people flooded (Mp yr$^{-1}$)']
+titles = ['Coastal assets', 'total costs of SLR', 'Number of people flooded']
+ylims = [(0,500), (0,10000), (0,200)]
+all_data = [np.asarray(data_assets)*0.001, data_costs, data_flooded]
+
+abc = ['(a)', '(b)', '(c)']
+
+font=11
+plt.figure(figsize=(10,3), facecolor='white')
+plt.rcParams.update({'font.size': font})
+plt.rc('xtick', labelsize=font)
+plt.rc('ytick', labelsize=font)
+
+time=np.linspace(2010,2200,191)
+
+for iall, data in enumerate(all_data):
+    plt.subplot(131+iall)
+    ax=plt.gca()
+    ax.set_ylabel(ylabels[iall])
+    ax.set_ylim(ylims[iall])
+    ax.set_title(titles[iall], fontsize=font+1)
+    ax.set_xlabel('')
+    ax.set_xlim(2010,2200)
+    ax.set_xticks([2010,2050,2100,2150, 2200])
+
+    for idat, dat in enumerate(data):            
+        ax.plot(time, dat[:,isc,0], linewidth=3, label=labels_dat[idat], color=colors_dat[idat])
+        ax.fill_between(time, dat[:,isc,1], dat[:,isc,2], color=colors_dat[idat], alpha=0.3)
+
+
+    ax.text(0.01, 0.9, abc[iall], fontsize=font+2, transform=ax.transAxes)
+    ax.grid(axis='y')
+    ax.legend(loc='upper right')
+
+
+plt.tight_layout()
+plt.savefig('FRISIA_example_output.png', dpi=300)
+

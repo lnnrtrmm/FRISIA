@@ -7,9 +7,6 @@ import pandas as pd
 class SLRImpactModel:
     '''
     This is the impacts and adaptation module of FRISIA
-    ("Feedback-based knowledge Repository for Integrated assessments of Sea level rise Impacts and Adaptation")
-
-    The model is in principle based on the CIAM model (Diaz, 2016; Wong et al., 2022).
 
     Inputs:
     - global SLR or SLR components -> will be translated into coastal/regional population weighted SLR
@@ -18,23 +15,6 @@ class SLRImpactModel:
     - GDP time series -> for reference growth
     - population time series -> for reference growth
     - Information on aggregation level (currently available: DIVA_global, DIVA_bipolar, DIVA_regional; see below)
-    
-    Further inputs via setting model parameters:
-    - Protection and Retreat can be activated as adaptation options
-    - Coastal feedbacks can be activated (turned off by default for CIAM comparison)
-    
-    Outputs:
-    - global damage to assets due to storm surges
-    - number of people flooded in storm surges
-    - number of fatalities in storm surges
-    - flood protection investment and (net) maintenance cost;
-      -> net costs refer to the costs that would occur, if no additional protection would have happened
-    - assets lost during retreat
-    - abandoned asset demolition costs
-    - mobile asset relocation costs
-    - people relocation costs
-    - Opportunity costs of inundated or abandoned land
-    - ...
 
 
     Abbreviatios used:
