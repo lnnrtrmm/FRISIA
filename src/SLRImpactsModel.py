@@ -164,8 +164,8 @@ class SLRImpactModel:
         self.asset_demolition_cost_factor_range = (0.025, 0.075)
         self.not_depreciated_fraction_of_assets_at_time_of_retreat = 0.1                # dmnl
         self.not_depreciated_fraction_of_assets_at_time_of_retreat_range = (0.0, 0.2)
-        self.increase_factor_for_costs_of_reactive_retreat = 4.0                        # dmnl
-        self.increase_factor_for_costs_of_reactive_retreat_range = (3.0, 5.0)
+        self.people_retreat_cost_factor = 8.0                                           # dmnl
+        self.people_retreat_cost_factor_range = (6.7, 10.9)                             # values as in DCIM
         self.proactive_retreat_time_scale = 10.                                         # year
         self.proactive_retreat_time_scale_range = (5.0, 25.0)       
 
@@ -410,7 +410,7 @@ class SLRImpactModel:
         self.asset_relocation_cost_factor = self. __update_single_param(self.asset_relocation_cost_factor_range, np.random.rand())
         self.asset_demolition_cost_factor = self. __update_single_param(self.asset_demolition_cost_factor_range, np.random.rand())
         self.not_depreciated_fraction_of_assets_at_time_of_retreat = self. __update_single_param(self.not_depreciated_fraction_of_assets_at_time_of_retreat_range, np.random.rand())
-        self.increase_factor_for_costs_of_reactive_retreat = self. __update_single_param(self.increase_factor_for_costs_of_reactive_retreat_range, np.random.rand())
+        self.people_retreat_cost_factor = self. __update_single_param(self.people_retreat_cost_factor_range, np.random.rand())
         self.proactive_retreat_time_scale = self. __update_single_param(self.proactive_retreat_time_scale_range, np.random.rand())
         self.susceptibility_reduction_exponent = self. __update_single_param(self.susceptibility_reduction_exponent_range, np.random.rand())
         return
@@ -433,7 +433,7 @@ class SLRImpactModel:
                 np.copy(self.asset_relocation_cost_factor),
                 np.copy(self.asset_demolition_cost_factor),
                 np.copy(self.not_depreciated_fraction_of_assets_at_time_of_retreat),
-                np.copy(self.increase_factor_for_costs_of_reactive_retreat),
+                np.copy(self.people_retreat_cost_factor),
                 np.copy(self.proactive_retreat_time_scale),
                 np.copy(self.susceptibility_reduction_exponent)
             ]
@@ -457,7 +457,7 @@ class SLRImpactModel:
         self.asset_relocation_cost_factor                           = InputParameters[13]
         self.asset_demolition_cost_factor                           = InputParameters[14]
         self.not_depreciated_fraction_of_assets_at_time_of_retreat  = InputParameters[15]
-        self.increase_factor_for_costs_of_reactive_retreat          = InputParameters[16]
+        self.people_retreat_cost_factor                             = InputParameters[16]
         self.proactive_retreat_time_scale                           = InputParameters[17]
         self.susceptibility_reduction_exponent                      = InputParameters[18]
 
@@ -964,16 +964,26 @@ class SLRImpactModel:
     def __make_outputs(self):
         
         # ASSETS
-        self.assets_lost_during_retreat = (1.0 - self.mobile_asset_fraction) * (self.annual_reactive_asset_retreat \
-                                               + self.annual_proactive_asset_retreat * self.not_depreciated_fraction_of_assets_at_time_of_retreat)
 
+        self.assets_lost_during_reactive_retreat = (1.0 - self.mobile_asset_fraction) * self.annual_reactive_asset_retreat
+        self.assets_lost_during_proactive_retreat = (1.0 - self.mobile_asset_fraction) * self.annual_proactive_asset_retreat * self.not_depreciated_fraction_of_assets_at_time_of_retreat
+        self.assets_lost_during_retreat = self.assets_lost_during_reactive_retreat + self.assets_lost_during_proactive_retreat
+
+        self.asset_relocation_cost_reactive = self.annual_reactive_asset_retreat * self.mobile_asset_fraction * self.asset_relocation_cost_factor
+        self.asset_relocation_cost_proactive = self.annual_proactive_asset_retreat * self.mobile_asset_fraction * self.asset_relocation_cost_factor
         self.asset_relocation_cost = self.annual_total_asset_retreat * self.mobile_asset_fraction * self.asset_relocation_cost_factor
+
+        self.asset_demolition_cost_reactive = self.annual_reactive_asset_retreat * self.asset_demolition_cost_factor * (1.0 - self.mobile_asset_fraction)
+        self.asset_demolition_cost_proactive = self.annual_proactive_asset_retreat * self.asset_demolition_cost_factor * (1.0 - self.mobile_asset_fraction)
         self.asset_demolition_cost = self.annual_total_asset_retreat * self.asset_demolition_cost_factor * (1.0 - self.mobile_asset_fraction)
 
-        
         # PEOPLE
-        # Reactive retreat is five times as costly as proactive retreat, just like in CIAM
-        self.people_retreat_cost = (self.annual_proactive_people_retreat + self.increase_factor_for_costs_of_reactive_retreat * self.annual_reactive_people_retreat) * self.coastal_GDPperCapita
+        # Reactive retreat is five times as costly as proactive retreat, just like in CIAM -> No, in DSCIM they use the same factor for both, but a much higher one!
+        # Apply the DSCIM formulation here
+        self.people_retreat_cost_reactive = self.annual_reactive_people_retreat * self.coastal_GDPperCapita * self.people_retreat_cost_factor
+        self.people_retreat_cost_proactive = self.annual_proactive_people_retreat * self.coastal_GDPperCapita * self.people_retreat_cost_factor
+        self.people_retreat_cost = self.people_retreat_cost_reactive + self.people_retreat_cost_proactive
+
 
         # CIAM reference: This is for comparison to CIAM output
 
@@ -985,20 +995,22 @@ class SLRImpactModel:
 
         # 1. Opportunity cost: value of land used up for flood protection
         #   - DON'T (subtract the initial fp height, in order to only get the additional opportunity costs), not done in CIAM
+        #     -> From now on, do actually only account for the increase in fp height, despite CIAM not doing it
         #   - Factor 1.7 comes from ratio between dike height and width (60° angle, as in CIAM)
         #   - In the end divided by 2, as in CIAM
-        self.fp_land_opportunity_cost = self.total_fp_length[:,np.newaxis] * 1.7 * self.average_fp_height * 0.001 * land_cost_per_sqkm / 2.0
+        self.fp_land_opportunity_cost = self.total_fp_length[:,np.newaxis] * 1.7 * (self.average_fp_height - self.average_fp_height[:,0,np.newaxis]) * 0.001 * land_cost_per_sqkm / 2.0
 
         # 2. Opportunity cost: value of land that is inundated or abandoned
+        self.inundated_area_opportunity_cost = self.inundated_area * land_cost_per_sqkm
+        self.abandoned_area_opportunity_cost = self.inundated_area * land_cost_per_sqkm
         lost_area = np.maximum(self.inundated_area, self.abandoned_area)
         self.lost_land_opportunity_cost =  lost_area * land_cost_per_sqkm
 
         # Total opportunity costs of the land that is lost
-        self.total_opportunity_cost = self.fp_land_opportunity_cost + self.lost_land_opportunity_cost
+        self.total_opportunity_cost = self.fp_land_opportunity_cost[:,np.newaxis] + self.lost_land_opportunity_cost
 
         # All land that is lost either for protection or from inundation or from retreat
-        self.land_lost = np.maximum(lost_area, self.total_fp_length[:,np.newaxis] * 1.7 * self.average_fp_height * 0.001 / 2.0)
-        
+        self.land_lost = np.maximum(lost_area, self.total_fp_length[:,np.newaxis] * 1.7 * (self.average_fp_height - self.average_fp_height[:,0,np.newaxis]) * 0.001 / 2.0)
 
         #####
         # CIAM reference: These are for comparison to CIAM output
@@ -1013,6 +1025,13 @@ class SLRImpactModel:
 
         ### Overall SLR costs, all potential costs added upp
         self.annual_SLR_costs = self.relocation_cost + self.flood_cost +  self.net_construct_cost + self.storm_cost
+
+        ### SLR costs separated by damages or adaptation_costs
+        self.annual_SLR_damages = self.assets_lost_during_reactive_retreat + self.asset_relocation_cost_reactive + self.asset_demolition_cost_reactive\
+                                            + self.people_retreat_cost_reactive + self.storm_cost + self.inundated_area_opportunity_cost
+
+        self.annual_SLR_adaptation_costs = self.assets_lost_during_proactive_retreat + self.asset_relocation_cost_proactive + self.asset_demolition_cost_proactive \
+                                            + self.people_retreat_cost_proactive + self.net_construct_cost + self.abandoned_area_opportunity_cost
 
 
         return
