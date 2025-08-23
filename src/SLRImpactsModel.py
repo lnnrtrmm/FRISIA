@@ -223,6 +223,7 @@ class SLRImpactModel:
         self.fp_land_opportunity_cost                   = np.zeros((self.ndim, self.nyears))
         self.annual_costs_of_fp_maintenance             = np.zeros((self.ndim, self.nyears))
         self.annual_costs_of_fp_maintenance_noadapt     = np.zeros((self.ndim, self.nyears))
+        self.mask_annual_fp_investment_limited          = np.zeros((self.ndim, self.nyears))
 
 
         ### Population variables
@@ -602,6 +603,7 @@ class SLRImpactModel:
         if self.include_fp_investment_cap:
             self.effective_annual_investment_in_fp[:,i] = np.minimum(cost_of_reaching_desired_protection / self.fp_construction_duration,
                                                                        maximum_money_available_for_fp)
+            self.mask_annual_fp_investment_limited[:,i] = np.where(cost_of_reaching_desired_protection / self.fp_construction_duration > maximum_money_available_for_fp, 1.0, 0.0)
         else:
             self.effective_annual_investment_in_fp[:,i] = cost_of_reaching_desired_protection / self.fp_construction_duration
 
@@ -1002,7 +1004,7 @@ class SLRImpactModel:
 
         # 2. Opportunity cost: value of land that is inundated or abandoned
         self.inundated_area_opportunity_cost = self.inundated_area * land_cost_per_sqkm
-        self.abandoned_area_opportunity_cost = self.inundated_area * land_cost_per_sqkm
+        self.abandoned_area_opportunity_cost = self.abandoned_area * land_cost_per_sqkm
         lost_area = np.maximum(self.inundated_area, self.abandoned_area)
         self.lost_land_opportunity_cost =  lost_area * land_cost_per_sqkm
 
