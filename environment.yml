@@ -1,0 +1,11 @@
+name: frisia
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.8.3,<3.11    # Higher version numbers not tested
+  - numpy
+  - pandas
+  - netCDF4
+  - matplotlib
+  - sys
+  - scipy
