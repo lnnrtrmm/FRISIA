@@ -49,7 +49,7 @@ SLR_GIS    = SLRModel.getSLRGIS()
 SLR_AIS    = SLRModel.getSLRAIS()
 ```
 
-If we wanted to add the possibility of higher rates of sea level at certain levels of warming ("tipping behaviour"), we can create the instance of the SLRModel with the ```include_tipping=True``` option in the call to create the instance.
+If we wanted to add the possibility of higher rates of sea level at certain levels of warming ("high impact behaviour"), we can create the instance of the SLRModel with the ```include_highImpact=True``` option in the call to create the instance.
  
 #### Running the impacts and adaptation model
 The typical way to run the FRISIA impact and adaptation model is the following call:

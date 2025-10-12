@@ -9,12 +9,12 @@ class globalSLRModel:
     Global population is an optional input parameter.
     '''
 
-    def __init__(self, T, OHC_change, population=[-999], sy=1750, ey=2300, dt=1.0, dbg=0, include_tipping=False, randomize=False):
+    def __init__(self, T, OHC_change, population=[-999], sy=1750, ey=2300, dt=1.0, dbg=0, include_highImpact=False, randomize=False):
 
         ########## Set some global variables ################
         self.T_anomaly = T
         self.OHC_change = OHC_change
-        self.include_tipping = include_tipping
+        self.include_highImpact = include_highImpact
         self.randomize = randomize
         
         if population[0] == -999:
@@ -64,7 +64,7 @@ class globalSLRModel:
         # Vary all parameters that are differing between the low and high discharge versions of MAGICC
         self.GIS_rho_range = (1.0e-4, 5.0e-4)
         self.GIS_v_range = (0.5e-4, 2.0e-4)
-        # implement tipping also for GrIS (like for AntIS, but with GSAT anomaly not T_Ant as reference)
+        # implement high impact behaviour also for GrIS (like for AntIS, but with GSAT anomaly not T_Ant as reference)
         self.GIS_disintegration_rate_range = (0.001, 0.01)
         self.GIS_T_crit_range = (4,2.5) # Note lower number at 2nd position, as lower T_crit induces more melting
 
@@ -221,7 +221,7 @@ class globalSLRModel:
         self.AIS_T_crit = self.__scale_single_param(self.AIS_T_crit_range, self.AIS_scale_factor)
         self.AIS_disintegration_rate = self.__scale_single_param(self.AIS_disintegration_rate_range, self.AIS_scale_factor)
 
-        if not self.include_tipping:
+        if not self.include_highImpact:
             self.AIS_T_crit = 999.
             self.GIS_T_crit = 999.
         return
