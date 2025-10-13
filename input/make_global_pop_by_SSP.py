@@ -6,10 +6,10 @@ import sys
 sys.path.append('../processing')
 from helpers import extend_with_decreasing_growth
 
-new_ssp_extension = False
-sy = 2000
+new_ssp_extension = True
+sy = 1950
 ey = 2200
-nyears = 201
+nyears = 251
 scenarios = ['ssp126', 'ssp245', 'ssp370', 'ssp460', 'ssp585']
 n_sce=5
 
@@ -56,22 +56,22 @@ for si, sce in enumerate(scenarios):
         pop_SSP_raw = pop_SSP_raw + np.asarray(df.values[lidx+padds[i],5:16], dtype=float)
         nsum+=1
     
-    gdp_global[10:101,si] = np.interp(time[10:101], time_raw, gdp_SSP_raw[1:] / nsum) * 1.31 # conversion from USD2005 to USD2019 as is SLIIDERS
-    pop_global[10:101,si] = np.interp(time[10:101], time_raw, pop_SSP_raw[1:] / nsum)
+    gdp_global[60:151,si] = np.interp(time[60:151], time_raw, gdp_SSP_raw[1:] / nsum) * 1.31 # conversion from USD2005 to USD2019 as is SLIIDERS
+    pop_global[60:151,si] = np.interp(time[60:151], time_raw, pop_SSP_raw[1:] / nsum)
     
 # SSP4-6.0 and SSP1-2.6 do not match the other scenarios and population data, rebase upon the ssp2-4.5 scenario!
-for i in [0,3]: pop_global[10:101,i] = pop_global[10:101,i] * (pop_global[10,1] / pop_global[10,i])
+for i in [0,3]: pop_global[60:151,i] = pop_global[60:151,i] * (pop_global[60,1] / pop_global[60,i])
 
 if new_ssp_extension:
     constant_pop_in_years = 50
     constant_gdp_in_years = 100
     
-    pop_global = extend_with_decreasing_growth(pop_global, constant_pop_in_years, ndim=2, istart=100)
-    gdp_global = extend_with_decreasing_growth(gdp_global, constant_gdp_in_years, ndim=2, istart=100)
+    pop_global = extend_with_decreasing_growth(pop_global, constant_pop_in_years, ndim=2, istart=150)
+    gdp_global = extend_with_decreasing_growth(gdp_global, constant_gdp_in_years, ndim=2, istart=150)
 else:
     # extend population and gdp data with constant values between 2100 and 2200
-    pop_global = np.append(pop_global[:101], np.zeros((100,n_sce))+pop_global[np.newaxis,-1,:], axis=0)
-    gdp_global = np.append(gdp_global[:101], np.zeros((100,n_sce))+gdp_global[np.newaxis,-1,:], axis=0)
+    pop_global = np.append(pop_global[:151], np.zeros((100,n_sce))+pop_global[np.newaxis,150,:], axis=0)
+    gdp_global = np.append(gdp_global[:151], np.zeros((100,n_sce))+gdp_global[np.newaxis,150,:], axis=0)
     
 
     
@@ -82,7 +82,7 @@ df = pd.read_csv('WPP2022_TotalPopulation.csv')
 pop_UN_1950_2020 = np.zeros((71,n_sce))
 pop_UN_1950_2020[:,:] = df.values[:,1][:,np.newaxis]
 
-pop_global[:,:] = np.append(pop_UN_1950_2020[50:65] * 1e-3, 1.025*pop_global[15:], axis=0) # SSP data scaled to match UN World data in 2015
+pop_global[:,:] = np.append(pop_UN_1950_2020[:65] * 1e-3, 1.025*pop_global[65:], axis=0) # SSP data scaled to match UN World data in 2015
 
 
 data = {
