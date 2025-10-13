@@ -318,14 +318,14 @@ def ddf_P(d):
 
 #### Other functions
 
-def extend_with_decreasing_growth(x, horizon, istart=90):
+def extend_with_decreasing_growth(x, horizon, ndim=3, istart=90):
     # For extending input SSP data beyond 2100
-    slope = x[istart] - x[istart-1]
-    
+    slope = np.asarray([x[istart] - x[istart-1]])
+
     years = np.linspace(1,100,100) # from 2101 to 2200
-    years = years[:,np.newaxis,np.newaxis]
+    for i in range(ndim): years = years[:,np.newaxis]        
     
-    rslope = slope[np.newaxis,:,:]*np.maximum(1.0 - years/horizon, 0.0)
+    rslope = slope[np.newaxis,...]*np.maximum(1.0 - years/horizon, 0.0)
     
     for i in range(istart+1,len(x)):
         x[i] = x[i-1] + rslope[i-istart-1]
