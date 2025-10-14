@@ -176,7 +176,7 @@ def create_FLOPROS_DIVA(seg_ypcc, seg_gdp, seg_pop, seg_length, params, popdens,
 
 def create_FLOPROH_SLIIDERS(seg_ypcc, seg_elev_cap, seg_elev_pop, seg_length, params, surgeHeights):
     # WB groups by GDP per capita in USD2024
-    # SLIIDERS has data in USD2019
+    # SLIIDERS has data in USD 2019 PPP
     inflation_factor = 1.0/1.23
     
     bound1 = 1135. * inflation_factor
