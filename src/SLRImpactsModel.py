@@ -4,6 +4,18 @@ import numpy as np
 import sys
 import pandas as pd
 
+
+SLIIDERS_versions = ['SLIIDERS_global',
+                     'SLIIDERS_regional',
+                     'SLIIDERS_CapitalDens',
+                     'SLIIDERS_PopDens',
+                     'SLIIDERS_GDPpc']
+
+DIVA_versions = ['DIVA_global',
+                 'DIVA_bipolar',
+                 'DIVA_regional',
+                 'DIVA_GDPdens']
+
 class SLRImpactModel:
     '''
     This is the impacts and adaptation module of FRISIA
@@ -35,8 +47,8 @@ class SLRImpactModel:
                  USDyear=2010, version='DIVA_global', include_initial_fp=True, input_path='../input/'):
 
 
-        if version in ['DIVA_global', 'DIVA_bipolar', 'DIVA_regional', 'DIVA_GDPdens']: self.database = 'DIVA'
-        elif version in ['SLIIDERS_global', 'SLIIDERS_regional', 'SLIIDERS_CapitalDens']: self.database = 'SLIIDERS'
+        if version in DIVA_versions: self.database = 'DIVA'
+        elif version in SLIIDERS_versions: self.database = 'SLIIDERS'
         else: sys.exit('Given version is not defined!', version)
         self.version = version
 
