@@ -64,7 +64,7 @@ for i in [0,3]: pop_global[60:151,i] = pop_global[60:151,i] * (pop_global[60,1] 
 
 if new_ssp_extension:
     constant_pop_in_years = 50
-    constant_gdp_in_years = 100
+    constant_gdp_in_years = 50
     
     pop_global = extend_with_decreasing_growth(pop_global, constant_pop_in_years, ndim=2, istart=150)
     gdp_global = extend_with_decreasing_growth(gdp_global, constant_gdp_in_years, ndim=2, istart=150)

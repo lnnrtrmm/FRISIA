@@ -160,6 +160,8 @@ class SLRImpactModel:
         self.susceptibility_reduction_exponent_range = (1.0, 3.0)   # dmnl
 
         # Calibration parameter for reduced investment in unprotected coastal zones
+        self.coastal_asset_depreciation_time_scale = 30.
+        self.coastal_asset_depreciation_time_scale_range = (20.,40.)
         self.effective_flood_height_at_which_investment_is_halved = 1.0                   # m
         self.effective_flood_height_at_which_investment_is_halved_range = (0.5, 3.0)
         self.safe_coastal_zone_likelihood_threshold = 0.95                          # dmnl
@@ -410,6 +412,7 @@ class SLRImpactModel:
         self.flood_event_fatality_rate = self. __update_single_param(self.flood_event_fatality_rate_range, np.random.rand())
         self.fraction_of_storm_damages_that_is_repaired = self. __update_single_param(self.fraction_of_storm_damages_that_is_repaired_range, np.random.rand())
         self.flood_event_damage_fraction = self. __update_single_param(self.flood_event_damage_fraction_range, np.random.rand())
+        self.coastal_asset_depreciation_time_scale = self. __update_single_param(self.coastal_asset_depreciation_time_scale_range, np.random.rand())
         self.effective_flood_height_at_which_investment_is_halved = self. __update_single_param(self.effective_flood_height_at_which_investment_is_halved_range, np.random.rand())
         self.safe_coastal_zone_likelihood_threshold = self. __update_single_param(self.safe_coastal_zone_likelihood_threshold_range, np.random.rand())
         self.fraction_of_investments_that_must_be_at_the_coast = self. __update_single_param(self.fraction_of_investments_that_must_be_at_the_coast_range, np.random.rand())
@@ -433,6 +436,7 @@ class SLRImpactModel:
                 np.copy(self.flood_event_fatality_rate),
                 np.copy(self.fraction_of_storm_damages_that_is_repaired),
                 np.copy(self.flood_event_damage_fraction),
+                np.copy(self.coastal_asset_depreciation_time_scale),
                 np.copy(self.effective_flood_height_at_which_investment_is_halved),
                 np.copy(self.safe_coastal_zone_likelihood_threshold),
                 np.copy(self.fraction_of_investments_that_must_be_at_the_coast),
@@ -457,22 +461,23 @@ class SLRImpactModel:
         self.flood_event_fatality_rate                              = InputParameters[0]
         self.fraction_of_storm_damages_that_is_repaired             = InputParameters[1]
         self.flood_event_damage_fraction                            = InputParameters[2]
-        self.effective_flood_height_at_which_investment_is_halved   = InputParameters[3]
-        self.safe_coastal_zone_likelihood_threshold                 = InputParameters[4]
-        self.fraction_of_investments_that_must_be_at_the_coast      = InputParameters[5]
-        self.maximum_gdp_fraction_for_fp_investment                 = InputParameters[6]
-        self.fp_construction_duration                               = InputParameters[7]
-        self.fp_construction_cost_reference_USD2010                 = InputParameters[8]
-        self.maintenance_cost_fraction                              = InputParameters[9]
-        self.coastal_land_value_init_USD2010                        = InputParameters[10]
-        self.land_opportunity_cost_rate                             = InputParameters[11]
-        self.mobile_asset_fraction                                  = InputParameters[12]
-        self.asset_relocation_cost_factor                           = InputParameters[13]
-        self.asset_demolition_cost_factor                           = InputParameters[14]
-        self.not_depreciated_fraction_of_assets_at_time_of_retreat  = InputParameters[15]
-        self.people_retreat_cost_factor                             = InputParameters[16]
-        self.proactive_retreat_time_scale                           = InputParameters[17]
-        self.susceptibility_reduction_exponent                      = InputParameters[18]
+        self.coastal_asset_depreciation_time_scale                  = InputParameters[3]
+        self.effective_flood_height_at_which_investment_is_halved   = InputParameters[4]
+        self.safe_coastal_zone_likelihood_threshold                 = InputParameters[5]
+        self.fraction_of_investments_that_must_be_at_the_coast      = InputParameters[6]
+        self.maximum_gdp_fraction_for_fp_investment                 = InputParameters[7]
+        self.fp_construction_duration                               = InputParameters[8]
+        self.fp_construction_cost_reference_USD2010                 = InputParameters[9]
+        self.maintenance_cost_fraction                              = InputParameters[10]
+        self.coastal_land_value_init_USD2010                        = InputParameters[11]
+        self.land_opportunity_cost_rate                             = InputParameters[12]
+        self.mobile_asset_fraction                                  = InputParameters[13]
+        self.asset_relocation_cost_factor                           = InputParameters[14]
+        self.asset_demolition_cost_factor                           = InputParameters[15]
+        self.not_depreciated_fraction_of_assets_at_time_of_retreat  = InputParameters[16]
+        self.people_retreat_cost_factor                             = InputParameters[17]
+        self.proactive_retreat_time_scale                           = InputParameters[18]
+        self.susceptibility_reduction_exponent                      = InputParameters[19]
 
         return
 
@@ -878,20 +883,22 @@ class SLRImpactModel:
 
 
 
-        # First calculate theoretical asset growth in each coastal zone
-        theoretical_asset_growth = self.coastal_assets[:,i] * (self.assets[:,i+1] / self.assets[:,i] - 1.0)
+        # First calculate reference asset growth and investment in each coastal zone
+        reference_asset_growth = self.coastal_assets[:,i] * (self.assets[:,i+1] / self.assets[:,i] - 1.0)
+        asset_depreciation = self.coastal_assets[:,i] / self.coastal_asset_depreciation_time_scale
+        asset_investment = reference_asset_growth + asset_depreciation
 
-        # initialising some arrays for asset growth redistribution
-        actual_asset_growth = np.copy(theoretical_asset_growth)
-        safe_zone = np.ones_like(theoretical_asset_growth)
-        growth_moved_to_safe_zones = np.zeros(self.nreg)
+        # initialising some arrays for investment redistribution
+        actual_asset_investment = np.copy(asset_investment)
+        safe_zone = np.ones_like(asset_investment)
+        investment_moved_to_safe_zones = np.zeros(self.nreg)
 
 
-        # Remove small part of the growth from the insufficiently protected assets
+        # Remove small part of the investment from the insufficiently protected assets
         for icz, likelihood in enumerate(self.likelihood_of_investment_in_coastal_zones[:,i]):
             if likelihood < self.safe_coastal_zone_likelihood_threshold:
-                actual_asset_growth[icz] = theoretical_asset_growth[icz] * likelihood
-                growth_moved_to_safe_zones[icz] = theoretical_asset_growth[icz] * (1.0 - likelihood)
+                actual_asset_investment[icz] = asset_investment[icz] * likelihood
+                investment_moved_to_safe_zones[icz] = asset_investment[icz] * (1.0 - likelihood)
                 safe_zone[icz] = 0
         
 
@@ -900,18 +907,18 @@ class SLRImpactModel:
         if np.sum(safe_zone) != 0.0:
             safe_asset_fractions = (self.coastal_assets[:,i]*safe_zone) / np.sum(self.coastal_assets[:,i]*safe_zone)
         
-        # Add some of the removed growth to well protected assets,
+        # Add some of the removed investment to well protected assets,
         # but not all of it! Some is moved away from the coast, because it is not coast-specific.
-        growth_staying_at_coast = growth_moved_to_safe_zones * self.fraction_of_investments_that_must_be_at_the_coast
-        growth_moving_away_from_coast = growth_moved_to_safe_zones - growth_staying_at_coast
+        investment_staying_at_coast = investment_moved_to_safe_zones * self.fraction_of_investments_that_must_be_at_the_coast
+        investment_moving_away_from_coast = investment_moved_to_safe_zones - investment_staying_at_coast
 
         if np.sum(safe_zone) == 0 or not self.move_around_growth:
-            actual_asset_growth += growth_staying_at_coast
+            actual_asset_investment += investment_staying_at_coast
         else:
-            total_growth_staying_at_coast = np.sum(growth_staying_at_coast)
+            total_investment_staying_at_coast = np.sum(investment_staying_at_coast)
             for icz, likelihood in enumerate(self.likelihood_of_investment_in_coastal_zones[:,i]):
                 if likelihood >= self.safe_coastal_zone_likelihood_threshold:
-                    actual_asset_growth[icz] += total_growth_staying_at_coast * safe_asset_fractions[icz]
+                    actual_asset_investment[icz] += total_investment_staying_at_coast * safe_asset_fractions[icz]
 
         if self.dbg==1: print('        asset growth calculation done')        
         ##########################################################################################
@@ -921,8 +928,8 @@ class SLRImpactModel:
         ##########################################################################################
         # The asset feedback switch (default: 0) determines what fraction of storm damages actually reduces coastal asset values.
         # In CIAM this is 0, because it is assumed that storm surge damages are repaired always.
-        self.coastal_assets[:,i+1] = self.coastal_assets[:,i] + actual_asset_growth[:] - self.annual_total_asset_retreat[:,i] \
-                                   - self.asset_feedback_switch \
+        self.coastal_assets[:,i+1] = self.coastal_assets[:,i] + actual_asset_investment - asset_depreciation \
+                                     - self.annual_total_asset_retreat[:,i] - self.asset_feedback_switch \
                                    * (1.0 - self.fraction_of_storm_damages_that_is_repaired) * self.annual_storm_damage_to_assets[:,i]
         return
         
