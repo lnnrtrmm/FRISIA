@@ -49,7 +49,7 @@ class SLRImpactModel:
 
         if version in DIVA_versions: self.database = 'DIVA'
         elif version in SLIIDERS_versions: self.database = 'SLIIDERS'
-        else: sys.exit('Given version is not defined!', version)
+        else: sys.exit('Given version is not defined! '+version)
         self.version = version
 
 
