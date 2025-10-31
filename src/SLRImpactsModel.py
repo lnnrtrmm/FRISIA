@@ -206,7 +206,7 @@ class SLRImpactModel:
         self.not_depreciated_fraction_of_assets_at_time_of_retreat = 0.1                # dmnl
         self.not_depreciated_fraction_of_assets_at_time_of_retreat_range = (0.0, 0.2)
         self.people_retreat_cost_factor = 8.0                                           # dmnl
-        self.people_retreat_cost_factor_range = (6.7, 10.9)                             # values as in DSCIM-Coastal
+        self.people_retreat_cost_factor_range = (3.0, 10.9)                             # values as in DSCIM-Coastal, but extended to the lower end values of other studies
         self.proactive_retreat_time_scale = 10.                                         # year
         self.proactive_retreat_time_scale_range = (5.0, 25.0)       
 
