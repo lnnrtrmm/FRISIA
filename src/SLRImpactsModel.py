@@ -44,7 +44,7 @@ class SLRImpactModel:
 
     def __init__(self, SLR_total, T, CO2emis, population, gdp, assets=[], nreg=2, sy=2010, ey=2100, dt=1.0, dbg=0, damage=True, 
                  include_SLR_components=False, SLR_components=[], randomize=False,
-                 USDyear=2010, version='DIVA_global', include_initial_fp=True, input_path='../input/'):
+                 USDyear=2010, version='SLIIDERS_global', input_path='../input/'):
 
 
         if version in DIVA_versions: self.database = 'DIVA'
@@ -106,10 +106,6 @@ class SLRImpactModel:
         ####################################################################################
 
         self.damage = damage
-        self.include_initial_fp = include_initial_fp
-        # This determines the type of fit that is used
-        if self.include_initial_fp: self.iFit = 0
-        else: self.iFit = 1
 
         self.willingness_to_invest_in_fp = 0.0 # [0,1] Can also be time-dependent array
         self.willingness_to_retreat = 0.0 # [0,1]
@@ -333,6 +329,15 @@ class SLRImpactModel:
         self.average_fp_height_init  = df.average_fp_height.values[:]
         self.total_fp_length         = df.total_fp_length.values[:]
 
+        # Information on coastal surge heights
+        self.surge_heights = np.ones((self.nreg,4))
+        # Only update for SLIIDERS database
+        if self.database == 'SLIIDERS':
+            self.surge_heights[:,0] = df.surge1_height.values[:]
+            self.surge_heights[:,1] = df.surge10_height.values[:]
+            self.surge_heights[:,2] = df.surge100_height.values[:]
+            self.surge_heights[:,3] = df.surge1000_height.values[:]
+
         ### Loading in the fit parameters
         # 2 cases (parameters with and without initial flood protection), 4 parameters and X regions
         self.inund_params_area            = np.zeros((2,4,self.nreg))
@@ -374,7 +379,7 @@ class SLRImpactModel:
         ################################################################################
 
 
-    def fit_function(self, x, params, ifunc):
+    def fit_function(self, x, params, ifunc=0):
         if ifunc==0:
             k = params[ifunc,0]
             x0 = params[ifunc,1]
@@ -385,9 +390,22 @@ class SLRImpactModel:
             a=params[ifunc,0]
             b=params[ifunc,1]
             c=params[ifunc,2]
-            return a*np.log(b*x+1)+c
 
-    def inverse_fit_function(self, F, params, ifunc):
+            np.seterr(invalid='raise') 
+
+            try:
+                result=a*np.log(b*x+1)+c
+            except FloatingPointError as e:
+
+                print(a, b, c, x)
+                print()
+                print(b*x + 1)
+
+                result=np.nan
+                raise
+
+            return result
+    def inverse_fit_function(self, F, params, ifunc=0):
         if ifunc==0:
             k = params[ifunc,0]
             x0 = params[ifunc,1]
@@ -401,8 +419,9 @@ class SLRImpactModel:
             return (np.exp((F - c) / a) - 1.0) / b
 
     def __calc_fitted_variable(self, dflood, dh, params):
+
+        # dh >= 0:
         # This accounts for the possibility that dikes are raised, but SLR was faster (include_failing_protection=True)
-        
         # E.g. for inundated asset fractions:
         # Assume a SLR of 2m, but protection was also increased by dh=1m. Then dflood = SLR - dh = 1m.
         # The fit_function would simply calculate the inundated asset fraction "f0" for 1m in this case.
@@ -412,10 +431,20 @@ class SLRImpactModel:
         # data to produce reasonable estimates of the inundated asset fractions (and the other parameters) in these scenarios.
 
         # If this is not activated, then dh = 0 and f = f0, so the option is automatically turned off.
-        f0 = self.fit_function(dflood, params, self.iFit)
-        f1 = self.fit_function(dflood+dh, params, self.iFit)
-        return np.where(dflood < 0, f0, f0 + (f1-f0) * (f0/(params[self.iFit,2,:] + params[self.iFit,3,:])))
+        f0_pos = self.fit_function(dflood, params)
+        f1_pos = self.fit_function(dflood+dh, params)
 
+        # dh < 0:
+        # If the average dike height has been reduced, then we should not use dflood itself to calculate the damages.
+        # Instead we can start by defining the minimum and maximum inundated/susceptible/exposed fractions:
+        # The minimum fraction is that of only using SLR (SLR = dflood + dh), assuming dikes would still be as in the initial state
+        # The maximum fraction is derived from using the same SLR, but assuming that all dikes are gone
+        f0_neg = self.fit_function(dflood+dh, params)
+        f1_neg = self.fit_function(dflood+dh, params, ifunc=1)
+        
+
+        return np.where(dh >= 0, np.where(dflood < 0, f0_pos, f0_pos + (f1_pos-f0_pos) * (f0_pos/(params[0,2,:] + params[0,3,:]))),
+                                 f0_neg + (f1_neg - f0_neg) * (np.abs(dh) / self.average_fp_height[:,0]) )
 
     def __update_single_param(self, prange, scale_factor):
         return prange[0] + scale_factor * (prange[1] - prange[0])
@@ -500,9 +529,6 @@ class SLRImpactModel:
 
         if self.dbg == 1: print('Initialising variables!')
 
-        if self.include_failing_protection and not self.include_initial_fp:
-            sys.exit('Model not fixed to allow failing protection in setup that ignores initial dikes!')
-
         # First, randomize the uncertainty parameters, if this is activated.
         if self.randomize: self.__randomize_parameters()
 
@@ -539,18 +565,16 @@ class SLRImpactModel:
         self.storm_damage_resilience[:,0] = self.coastal_GDPperCapita[:,0] / (self.coastal_GDPperCapita[:,0] + self.ypc_US_2010)
 
         # Initialise main stocks
-        if self.include_initial_fp: self.average_fp_height[:,0]  = self.average_fp_height_init[:]
-        else: self.average_fp_height[:,0]  = 0.0
-
+        self.average_fp_height[:,0]  = self.average_fp_height_init[:]
+        
 
         # Now calculate the initial fractions of assets and people that are exposed to storm surges generally, as well as the
         # initial values for the inundated asset, people and area fractions. The latter should theoretically be 0 with the original data,
         # but the fitted function produces very small values for a SLR of 0 meters. 
         # Also, if SLR is not 0 in the initial year, then this will also be > 0.
     
-        # Calculation uses different fit functions, depending on the above question (logistic and logarithmic functions)
         for iparam, params in enumerate(self.parameters):
-            self.variables[iparam][:,0] = self.fit_function(self.effective_flood_height[:,0], params, self.iFit)
+            self.variables[iparam][:,0] = self.fit_function(self.effective_flood_height[:,0], params, 0)
 
         # Check if given willingness_to_invest variable is time dependent variable with correct length or a scalar
         if not isinstance(self.willingness_to_invest_in_fp, (list, np.ndarray)):
@@ -879,7 +903,7 @@ class SLRImpactModel:
         # -> Less growth if it is expected that net flood height will increase (or is already high)
         expected_effective_flood_height = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i] \
                                             - self.potential_fp_height_increase_over_50_years[:,i]
-        expected_susceptible_fraction = self.fit_function(expected_effective_flood_height, self.storm_suscept_params_assets, self.iFit)
+        expected_susceptible_fraction = self.fit_function(expected_effective_flood_height, self.storm_suscept_params_assets)
 
         if self.include_reduced_growth and self.damage:
             dflood =  np.maximum(0, self.expected_SLR_in_50_years[:,i] + self.effective_flood_height[:,i]\
@@ -973,19 +997,14 @@ class SLRImpactModel:
         else: dh = 0
 
         for iparam, param in enumerate(self.parameters):
-            f = self.__calc_fitted_variable(dflood,dh,param)
-
-            # Do not allow that inundated areas become protected again (iparam <3). Susceptibilities and annual exposure can reduce again.
-            if iparam < 3:
-                self.variables[iparam][:,i+1] = np.maximum(self.variables[iparam][:,i], f)
-            else: 
-                self.variables[iparam][:,i+1] = f
+            self.variables[iparam][:,i+1] = self.__calc_fitted_variable(dflood,dh,param)
 
         # To get the abandoned area during retreat, we first calculate the effective retreat height using the asset inundation without
-        # initial flood protection (the inverse of the log function used to calculate inundated assets in this case).
-        self.effective_retreat_height[:,i] = self.inverse_fit_function(self.retreated_original_asset_fraction[:,i], self.inund_params_assets, 1)
-        self.abandoned_area[:,i+1] = np.maximum(self.abandoned_area[:,i], 
-                                                self.fit_function(self.effective_retreat_height[:,i],self.inund_params_area, 1))
+        # initial flood protection (the inverse of the function used to calculate inundated assets in this case).
+        self.effective_retreat_height[:,i] = np.maximum(0, self.inverse_fit_function(self.retreated_original_asset_fraction[:,i],
+                                                                                     self.inund_params_assets, ifunc=1))
+        self.abandoned_area[:,i+1] = np.maximum(self.abandoned_area[:,i], self.fit_function(self.effective_retreat_height[:,i],
+                                                self.inund_params_area, ifunc=1))
 
 
         return
@@ -1007,8 +1026,7 @@ class SLRImpactModel:
         self.asset_demolition_cost = self.annual_total_asset_retreat * self.asset_demolition_cost_factor * (1.0 - self.mobile_asset_fraction)
 
         # PEOPLE
-        # Reactive retreat is five times as costly as proactive retreat, just like in CIAM -> No, in DSCIM they use the same factor for both, but a much higher one!
-        # Apply the DSCIM formulation here
+        
         self.people_retreat_cost_reactive = self.annual_reactive_people_retreat * self.coastal_GDPperCapita * self.people_retreat_cost_factor
         self.people_retreat_cost_proactive = self.annual_proactive_people_retreat * self.coastal_GDPperCapita * self.people_retreat_cost_factor
         self.people_retreat_cost = self.people_retreat_cost_reactive + self.people_retreat_cost_proactive
