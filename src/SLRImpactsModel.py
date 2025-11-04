@@ -123,7 +123,6 @@ class SLRImpactModel:
 
         # Include maximum available money for flood protection as fraction of GDP?
         self.include_fp_investment_cap = False
-        self.include_initial_fp_for_money_availability = False
 
         # Include the possibility that raised flood protection is breached (i.e. protection is raised, but SLR is even faster)
         self.include_failing_protection = False
@@ -190,6 +189,8 @@ class SLRImpactModel:
         self.coastal_land_value_init_USD2010_range = (0.005, 0.006)
         self.land_opportunity_cost_rate = 0.04                              # 1/year, from CIAM
         self.land_opportunity_cost_rate_range = (0.03, 0.05)
+        self.maximum_fp_deterioration_rate = 0.05                           # m/year
+        self.maximum_fp_deterioration_rate_range = (0.02, 0.1)
 
 
         #### Retreat parameters; default from CIAM with added uncertainty ranges
@@ -249,15 +250,16 @@ class SLRImpactModel:
         self.expected_SLR_in_50_years = np.zeros((self.nreg, self.nyears))
 
         ### Flood protection (fp) variables
-        self.average_fp_height                          = np.zeros((self.nreg, self.nyears))
-        self.annual_change_in_fp_height                 = np.zeros((self.nreg, self.nyears))
-        self.construction_cost                          = np.zeros((self.nreg, self.nyears))
-        self.effective_annual_investment_in_fp          = np.zeros((self.nreg, self.nyears))
-        self.potential_fp_height_increase_over_50_years = np.zeros((self.nreg, self.nyears))
-        self.fp_land_opportunity_cost                   = np.zeros((self.nreg, self.nyears))
-        self.annual_costs_of_fp_maintenance             = np.zeros((self.nreg, self.nyears))
-        self.annual_costs_of_fp_maintenance_noadapt     = np.zeros((self.nreg, self.nyears))
-        self.mask_annual_fp_investment_limited          = np.zeros((self.nreg, self.nyears))
+        self.average_fp_height                                = np.zeros((self.nreg, self.nyears))
+        self.annual_increase_in_fp_height_from_investment     = np.zeros((self.nreg, self.nyears))
+        self.annual_reduction_in_fp_height_from_deterioration = np.zeros((self.nreg, self.nyears))
+        self.construction_cost                                = np.zeros((self.nreg, self.nyears))
+        self.effective_annual_investment_in_fp                = np.zeros((self.nreg, self.nyears))
+        self.potential_fp_height_increase_over_50_years       = np.zeros((self.nreg, self.nyears))
+        self.fp_land_opportunity_cost                         = np.zeros((self.nreg, self.nyears))
+        self.annual_costs_of_fp_maintenance                   = np.zeros((self.nreg, self.nyears))
+        self.annual_costs_of_fp_maintenance_noadapt           = np.zeros((self.nreg, self.nyears))
+        self.mask_annual_fp_investment_limited                = np.zeros((self.nreg, self.nyears))
 
 
         ### Population variables
@@ -470,6 +472,7 @@ class SLRImpactModel:
         self.people_retreat_cost_factor = self. __update_single_param(self.people_retreat_cost_factor_range, np.random.rand())
         self.proactive_retreat_time_scale = self. __update_single_param(self.proactive_retreat_time_scale_range, np.random.rand())
         self.susceptibility_reduction_exponent = self. __update_single_param(self.susceptibility_reduction_exponent_range, np.random.rand())
+        self.maximum_fp_deterioration_rate = self. __update_single_param(self.maximum_fp_deterioration_rate_range, np.random.rand())
         return
 
     def getUncertaintyParameters(self):
@@ -493,7 +496,8 @@ class SLRImpactModel:
                 np.copy(self.not_depreciated_fraction_of_assets_at_time_of_retreat),
                 np.copy(self.people_retreat_cost_factor),
                 np.copy(self.proactive_retreat_time_scale),
-                np.copy(self.susceptibility_reduction_exponent)
+                np.copy(self.susceptibility_reduction_exponent),
+                np.copy(self.maximum_fp_deterioration_rate),
             ]
         return uncertaintyParameters
 
@@ -519,6 +523,7 @@ class SLRImpactModel:
         self.people_retreat_cost_factor                             = InputParameters[17]
         self.proactive_retreat_time_scale                           = InputParameters[18]
         self.susceptibility_reduction_exponent                      = InputParameters[19]
+        self.maximum_fp_deterioration_rate                          = InputParameters[20]
 
         return
 
@@ -630,7 +635,7 @@ class SLRImpactModel:
 
 
 
-        ### HOW MUCH INVESTMENT?
+        ### FLOOD PROTECTION INVESTMENT
         # Current net flood height + expected SLR is missing protection
         if self.include_foresight_in_adaptation: missing_protection = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i]
         else: missing_protection = self.effective_flood_height[:,i]
@@ -639,20 +644,15 @@ class SLRImpactModel:
         cost_of_reaching_desired_protection = np.maximum(0, self.construction_cost[:,i] * self.total_fp_length * \
                     (( desired_protection + self.average_fp_height[:,i])**2 - self.average_fp_height[:,i]**2) )
     
-        if self.include_initial_fp_for_money_availability:
-            maintenance_cost = self.annual_costs_of_fp_maintenance[:,i]
-        else:
-            maintenance_cost =  self.annual_costs_of_fp_maintenance[:,i] - self.annual_costs_of_fp_maintenance_noadapt[:,i]
-
-
-        maximum_money_available_for_fp = np.maximum(0, self.coastal_GDP[:,i] * self.maximum_gdp_fraction_for_fp_investment \
+        maintenance_cost = self.annual_costs_of_fp_maintenance[:,i]
+        money_available_for_fp = np.maximum(0, self.coastal_GDP[:,i] * self.maximum_gdp_fraction_for_fp_investment \
                                             - maintenance_cost)
 
             
         if self.include_fp_investment_cap:
             self.effective_annual_investment_in_fp[:,i] = np.minimum(cost_of_reaching_desired_protection / self.fp_construction_duration,
-                                                                       maximum_money_available_for_fp)
-            self.mask_annual_fp_investment_limited[:,i] = np.where(cost_of_reaching_desired_protection / self.fp_construction_duration > maximum_money_available_for_fp, 1.0, 0.0)
+                                                                       money_available_for_fp)
+            self.mask_annual_fp_investment_limited[:,i] = np.where(cost_of_reaching_desired_protection / self.fp_construction_duration > money_available_for_fp, 1.0, 0.0)
         else:
             self.effective_annual_investment_in_fp[:,i] = cost_of_reaching_desired_protection / self.fp_construction_duration
 
@@ -663,9 +663,19 @@ class SLRImpactModel:
 
 
 
-        ### CHANGE IN FLOOD PROTECTION HEIGHT
-        self.annual_change_in_fp_height[:,i] = np.sqrt( self.average_fp_height[:,i]**2 + self.effective_annual_investment_in_fp[:,i] \
+        # change in fp height from investment
+        self.annual_increase_in_fp_height_from_investment[:,i] = np.sqrt( self.average_fp_height[:,i]**2 + self.effective_annual_investment_in_fp[:,i] \
                     / (self.total_fp_length * self.construction_cost[:,i]) ) - self.average_fp_height[:,i]
+
+
+        ### FLOOD PROTECTION DECLINE
+        if self.include_failing_protection:
+            # decline in average fp height, if it is below the 1-year return period surge height
+            surge1_height = self.surge_heights[:,0] + (self.SLR[:,i] - self.SLR[:,0])
+            # maximum deterioration rate if surge1 is more than 1 m higher than seawall, linear increase inbetween 
+            annual_deterioration = self.maximum_fp_deterioration_rate * np.minimum(1.0, np.maximum(0.0, surge1_height - self.average_fp_height[:,i]))
+            self.annual_reduction_in_fp_height_from_deterioration[:,i] = np.minimum(self.average_fp_height[:,i], annual_deterioration)
+                                                                                   
 
         if i >= self.nyears-1: return
         ##########################################################################################
@@ -673,7 +683,8 @@ class SLRImpactModel:
         ### UPDATE THE FLOOD PROTECTION HEIGHT
         ###
         ##########################################################################################
-        self.average_fp_height[:,i+1] = self.average_fp_height[:,i] + self.annual_change_in_fp_height[:,i]            
+        self.average_fp_height[:,i+1] = self.average_fp_height[:,i] + self.annual_increase_in_fp_height_from_investment[:,i] \
+                                                                    - self.annual_reduction_in_fp_height_from_deterioration[:,i]
         
         return
 
@@ -689,8 +700,8 @@ class SLRImpactModel:
             ##########################################################################################
 
             # There are two ways how people retreat from the coast:
-            #  1. Reactive retreat in response to inundation, which has very high costs.
-            #  2. Proactive retreat in response to expected inundation in 50 years, which has much lower costs.
+            #  1. Reactive retreat in response to flooding (people below surge1), which has very high costs.
+            #  2. Proactive retreat in response to expected exposure in 50 years, which has much lower costs.
         
             #### Reactive retreat ###################################################################
             # only after first timestep, because it is in response to SLR from one time step to the next
@@ -802,8 +813,8 @@ class SLRImpactModel:
             ##########################################################################################
 
             # There are two ways how asset retreat from the coast:
-            #  1. Reactive retreat in response to inundation, which has very high costs.
-            #  2. Proactive retreat in response to expected inundation in 50 years, which has much lower costs.
+            #  1. Reactive retreat in response to flooding (assets are below surge1), which has very high costs.
+            #  2. Proactive retreat in response to expected exposure in 50 years, which has much lower costs.
 
             #### Reactive retreat ####################################################################
             # only after first timestep, because it is in response to SLR from one time step to the next
