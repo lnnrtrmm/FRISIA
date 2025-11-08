@@ -10,11 +10,6 @@ SLIIDERS_versions = ['SLIIDERS_global',
                      'SLIIDERS_CapitalDens',
                      'SLIIDERS_PopDens']
 
-DIVA_versions = ['DIVA_global',
-                 'DIVA_bipolar',
-                 'DIVA_regional',
-                 'DIVA_GDPdens']
-
 class SLRImpactModel:
     '''
     This is the impacts and adaptation module of FRISIA
@@ -23,9 +18,10 @@ class SLRImpactModel:
     - global SLR or SLR components -> will be translated into coastal/regional population weighted SLR
     - global mean surface temperature anomaly -> for estimating the expected SLR in 50 years
     - total global CO2 emissions -> for estimating the expected SLR in 50 years
-    - GDP time series -> for reference growth
+    - asset time series -> for reference growth
     - population time series -> for reference growth
-    - Information on aggregation level (currently available: DIVA_global, DIVA_bipolar, DIVA_regional; see below)
+    - GDP time series -> for reference growth
+    - Information on aggregation level
 
 
     Abbreviatios used:
@@ -47,8 +43,7 @@ class SLRImpactModel:
                  USDyear=2010, version='SLIIDERS_global', input_path='../input/'):
 
 
-        if version in DIVA_versions: self.database = 'DIVA'
-        elif version in SLIIDERS_versions: self.database = 'SLIIDERS'
+        if version in SLIIDERS_versions: self.database = 'SLIIDERS'
         else: sys.exit('Given version is not defined! '+version)
         self.version = version
 
@@ -110,28 +105,28 @@ class SLRImpactModel:
         self.willingness_to_invest_in_fp = 0.0 # [0,1] Can also be time-dependent array
         self.willingness_to_retreat = 0.0 # [0,1]
 
-        self.asset_feedback_switch = 0.0 # [0,1] Do storm damages reduce the value of coastal assets?
-        self.people_feedback_switch = 0.0 # [0,1] Do storm fatalities reduce the coastal population?
+        self.asset_feedback_switch = 1.0 # [0,1] Do storm damages reduce the value of coastal assets?
+        self.people_feedback_switch = 1.0 # [0,1] Do storm fatalities reduce the coastal population?
 
         # Will protection or retreat be against current SLR or against SLR in 50 years?
         self.include_foresight_in_adaptation = True
 
         # Include reduced investment in coastal zones in case there will be increased flood heights in the future?
-        self.include_reduced_growth = False
+        self.include_reduced_growth = True
         # Include the possibility that assets are moved from unsafe to safe coastal zones (if above param is True)
         self.move_around_growth = True
 
         # Include maximum available money for flood protection as fraction of GDP?
-        self.include_fp_investment_cap = False
+        self.include_fp_investment_cap = True
 
         # Include the possibility that raised flood protection is breached (i.e. protection is raised, but SLR is even faster)
-        self.include_failing_protection = False
+        self.include_failing_protection = True
 
         # Include the effect of asset reduction and changing population on GDP per capita?
-        self.include_gdp_effect = False
+        self.include_gdp_effect = True
 
         # Include the effect of retreat leading to reduced storm surge exposure?
-        self.include_retreat_exposure_reduction = False
+        self.include_retreat_exposure_reduction = True
 
 
 
@@ -310,7 +305,7 @@ class SLRImpactModel:
         ################################################################################
         
         # These are predefined aggregation levels that load input parameters from files
-        # Input parameters are general aggregated information from the DIVA or SLIIDERS 
+        # Input parameters are general aggregated information from SLIIDERS database 
         # and fit parameters used to match aggregated infomation for inundation,
         # susceptibility and surge exposure etc.
 
@@ -327,18 +322,16 @@ class SLRImpactModel:
         self.SLR_weight_GIS          = df.SLR_weight_GIS.values[:]  
         self.SLR_weight_AIS          = df.SLR_weight_AIS.values[:]
         
-        # Information on the coastal regions (aggregated segment data from DIVA)
+        # Information on the coastal regions
         self.average_fp_height_init  = df.average_fp_height.values[:]
         self.total_fp_length         = df.total_fp_length.values[:]
 
         # Information on coastal surge heights
         self.surge_heights = np.ones((self.nreg,4))
-        # Only update for SLIIDERS database
-        if self.database == 'SLIIDERS':
-            self.surge_heights[:,0] = df.surge1_height.values[:]
-            self.surge_heights[:,1] = df.surge10_height.values[:]
-            self.surge_heights[:,2] = df.surge100_height.values[:]
-            self.surge_heights[:,3] = df.surge1000_height.values[:]
+        self.surge_heights[:,0] = df.surge1_height.values[:]
+        self.surge_heights[:,1] = df.surge10_height.values[:]
+        self.surge_heights[:,2] = df.surge100_height.values[:]
+        self.surge_heights[:,3] = df.surge1000_height.values[:]
 
         ### Loading in the fit parameters
         # 2 cases (parameters with and without initial flood protection), 4 parameters and X regions
