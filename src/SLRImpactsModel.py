@@ -189,8 +189,6 @@ class SLRImpactModel:
 
 
         #### Retreat parameters; default from CIAM with added uncertainty ranges
-        self.mobile_asset_fraction = 0.25                                               # dmnl
-        self.mobile_asset_fraction_range = (0.2, 0.3)
         self.asset_relocation_cost_factor = 0.1                                         # dmnl
         self.asset_relocation_cost_factor_range = (0.05, 0.15)
         self.asset_demolition_cost_factor = 0.05                                        # dmnl
@@ -325,6 +323,7 @@ class SLRImpactModel:
         # Information on the coastal regions
         self.average_fp_height_init  = df.average_fp_height.values[:]
         self.total_fp_length         = df.total_fp_length.values[:]
+        self.mobile_asset_fraction   = df.mobcapfrac.values[:,np.newaxis]
 
         # Information on coastal surge heights
         self.surge_heights = np.ones((self.nreg,4))
@@ -474,7 +473,6 @@ class SLRImpactModel:
         self.maintenance_cost_fraction = self. __update_single_param(self.maintenance_cost_fraction_range, np.random.rand())
         self.coastal_land_value_init_USD2010 = self. __update_single_param(self.coastal_land_value_init_USD2010_range, np.random.rand())
         self.land_opportunity_cost_rate = self. __update_single_param(self.land_opportunity_cost_rate_range, np.random.rand())
-        self.mobile_asset_fraction = self. __update_single_param(self.mobile_asset_fraction_range, np.random.rand())
         self.asset_relocation_cost_factor = self. __update_single_param(self.asset_relocation_cost_factor_range, np.random.rand())
         self.asset_demolition_cost_factor = self. __update_single_param(self.asset_demolition_cost_factor_range, np.random.rand())
         self.not_depreciated_fraction_of_assets_at_time_of_retreat = self. __update_single_param(self.not_depreciated_fraction_of_assets_at_time_of_retreat_range, np.random.rand())
@@ -499,7 +497,6 @@ class SLRImpactModel:
                 np.copy(self.maintenance_cost_fraction),
                 np.copy(self.coastal_land_value_init_USD2010),
                 np.copy(self.land_opportunity_cost_rate),
-                np.copy(self.mobile_asset_fraction),
                 np.copy(self.asset_relocation_cost_factor),
                 np.copy(self.asset_demolition_cost_factor),
                 np.copy(self.not_depreciated_fraction_of_assets_at_time_of_retreat),
@@ -525,14 +522,13 @@ class SLRImpactModel:
         self.maintenance_cost_fraction                              = InputParameters[10]
         self.coastal_land_value_init_USD2010                        = InputParameters[11]
         self.land_opportunity_cost_rate                             = InputParameters[12]
-        self.mobile_asset_fraction                                  = InputParameters[13]
-        self.asset_relocation_cost_factor                           = InputParameters[14]
-        self.asset_demolition_cost_factor                           = InputParameters[15]
-        self.not_depreciated_fraction_of_assets_at_time_of_retreat  = InputParameters[16]
-        self.people_retreat_cost_factor                             = InputParameters[17]
-        self.proactive_retreat_time_scale                           = InputParameters[18]
-        self.susceptibility_reduction_exponent                      = InputParameters[19]
-        self.maximum_fp_deterioration_rate                          = InputParameters[20]
+        self.asset_relocation_cost_factor                           = InputParameters[13]
+        self.asset_demolition_cost_factor                           = InputParameters[14]
+        self.not_depreciated_fraction_of_assets_at_time_of_retreat  = InputParameters[15]
+        self.people_retreat_cost_factor                             = InputParameters[16]
+        self.proactive_retreat_time_scale                           = InputParameters[17]
+        self.susceptibility_reduction_exponent                      = InputParameters[18]
+        self.maximum_fp_deterioration_rate                          = InputParameters[19]
 
         return
 
