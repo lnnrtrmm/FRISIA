@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/773698415.svg)](https://doi.org/10.5281/zenodo.17882696)
+
 # FRISIA
 
 FRISIA is the *Feedback-based knowledge Repository for Intergrated assessments of Sea level rise Impacts and Adaptation*. Its first published version 1.0 is fully described in [Ramme et al. (preprint)](https://egusphere.copernicus.org/preprints/2025/egusphere-2025-1875/). FRISIAv1.0 is developed as part of the new integrated assessment model [FRIDA](https://github.com/metno/WorldTransFRIDA) within the [WorldTrans project](https://worldtrans-horizon.eu/) of the Horizon Europe research and innovation programs under grant agreement no. 101081661.
