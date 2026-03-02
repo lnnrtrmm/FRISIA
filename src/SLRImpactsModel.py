@@ -10,7 +10,8 @@ warnings.filterwarnings('error', category=RuntimeWarning)
 SLIIDERS_versions = ['SLIIDERS_global',
                      'SLIIDERS_regional',
                      'SLIIDERS_CapitalDens',
-                     'SLIIDERS_PopDens']
+                     'SLIIDERS_PopDens',
+                     'SLIIDERS_PopDens100_lim0']
 
 class SLRImpactModel:
     '''
@@ -363,6 +364,7 @@ class SLRImpactModel:
                            self.surge1_inund_params_area, self.surge1_inund_params_assets, self.surge1_inund_params_people,
                            self.storm_suscept_params_assets, self.storm_suscept_params_people,
                            self.storm_exposure_params_assets, self.storm_exposure_params_people]
+        self.limits = [None, 1.0, 1.0, None, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
         filenames_extensions = ['inund_params_area', 'inund_params_assets', 'inund_params_people',
                                 'ann_inund_params_area', 'ann_inund_params_assets', 'ann_inund_params_people',
                                 'storm_suscept_params_assets', 'storm_suscept_params_people',
@@ -390,15 +392,18 @@ class SLRImpactModel:
         ################################################################################
 
 
-    def fit_function(self, x, params, ifunc=0):
+    def fit_function(self, x, params, limit=1.0, ifunc=0):
         k = params[ifunc,0]
         x0 = params[ifunc,1]
         A = params[ifunc,2]
         c = params[ifunc,3]
-        return np.maximum(1e-6,A/(1.0 + np.exp(-k*(x-x0))) + c)
+        result = np.maximum(1e-6,A/(1.0 + np.exp(-k*(x-x0))) + c)
+        if limit is not None:
+            result = np.minimum(limit, result)
+        return result
 
 
-    def __fitted_variable(self, dflood, dh, params):
+    def __fitted_variable(self, dflood, dh, params, limit=1.0):
 
         # dh >= 0:
         # This accounts for the possibility that dikes are raised, but SLR was faster (include_failing_protection=True)
@@ -411,16 +416,16 @@ class SLRImpactModel:
         # data to produce reasonable estimates of the inundated asset fractions (and the other parameters) in these scenarios.
 
         # If this is not activated, then dh = 0 and f = f0, so the option is automatically turned off.
-        f0_pos = self.fit_function(dflood, params)
-        f1_pos = self.fit_function(dflood+dh, params)
+        f0_pos = self.fit_function(dflood, params, limit=limit)
+        f1_pos = self.fit_function(dflood+dh, params, limit=limit)
 
         # dh < 0:
         # If the average dike height has been reduced, then we should not use dflood itself to calculate the damages.
         # Instead we can start by defining the minimum and maximum inundated/susceptible/exposed fractions:
         # The minimum fraction is that of only using SLR (SLR = dflood + dh), assuming dikes would still be as in the initial state
         # The maximum fraction is derived from using the same SLR, but assuming that all dikes are gone
-        f0_neg = self.fit_function(dflood+dh, params)
-        f1_neg = self.fit_function(dflood+dh, params, ifunc=1)
+        f0_neg = self.fit_function(dflood+dh, params, limit=limit)
+        f1_neg = self.fit_function(dflood+dh, params, limit=limit, ifunc=1)
         
 
         return np.where(dh >= 0, np.where(dflood < 0, f0_pos, f0_pos + (f1_pos-f0_pos) * (f0_pos/(params[0,2,:] + params[0,3,:]))),
@@ -569,7 +574,7 @@ class SLRImpactModel:
         # Also, if SLR is not 0 in the initial year, then this will also be > 0.
     
         for iparam, params in enumerate(self.parameters):
-            self.variables[iparam][:,0] = self.__fitted_variable(self.effective_flood_height[:,0], 0, params)
+            self.variables[iparam][:,0] = self.__fitted_variable(self.effective_flood_height[:,0], 0, params, limit=self.limits[iparam])
 
         # Check if given willingness_to_invest variable is time dependent variable with correct length or a scalar
         if not isinstance(self.willingness_to_invest_in_fp, (list, np.ndarray)):
@@ -643,9 +648,12 @@ class SLRImpactModel:
             self.effective_annual_investment_in_fp[:,i] = cost_of_reaching_desired_protection / self.fp_construction_duration
 
         # Calculate potential maximum fp height increase for asset investment decision making
-        potential_max_investment_over_50_years = self.effective_annual_investment_in_fp[:,i] * self.expSLR_timeHorizon
+        # Use current maximum spending and the expected willingness to invest in fp, based on previous willingness in the past
+        istart = np.maximum(0,i-int(self.proactive_retreat_time_scale))
+        expected_willingness_to_invest_in_fp = np.mean(self.willingness_to_invest_in_fp[:,istart:i+1], axis=1)
+        potential_investment_over_50_years = money_available_for_fp * expected_willingness_to_invest_in_fp * self.expSLR_timeHorizon
         self.potential_fp_height_increase_over_50_years[:,i] =  np.sqrt( self.average_fp_height[:,i]**2 \
-                        + potential_max_investment_over_50_years / (self.total_fp_length * self.construction_cost[:,i]) ) - self.average_fp_height[:,i]
+                        + potential_investment_over_50_years / (self.total_fp_length * self.construction_cost[:,i]) ) - self.average_fp_height[:,i]
 
 
 
@@ -751,11 +759,11 @@ class SLRImpactModel:
 
             retreating_people_fraction = self.willingness_to_retreat[:,i] \
                     *  np.maximum(0, np.maximum(expected_exposed_fraction - self.orig_exposed_people_fraction[:,0],
-                                                expected_inundated_fraction - total_removed_fraction))
+                                                expected_inundated_fraction) - total_removed_fraction)
 
             # Here also approximate the abandoned land to estimate opportunity costs later on
-            lower_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.inund_params_area)
-            upper_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.surge1_inund_params_area)
+            lower_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.inund_params_area, limit=None)
+            upper_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.surge1_inund_params_area, limit=None)
             expected_inundated_land = lower_bound + self.retreat_sensitivity * (upper_bound - lower_bound)
             current_inundated_land = self.__calc_autonomous_retreat_fraction(i,'area')
             self.abandoned_area[:,i] = current_inundated_land + self.willingness_to_retreat[:,i] * (expected_inundated_land - current_inundated_land) \
@@ -763,7 +771,8 @@ class SLRImpactModel:
             if i==0: self.retreated_original_people_fraction[:,i] = self.retreated_original_people_fraction[:,0] + retreating_people_fraction
             else: self.retreated_original_people_fraction[:,i] = self.retreated_original_people_fraction[:,i-1] + retreating_people_fraction
     
-            self.annual_proactive_people_retreat[:,i] = self.coastal_population[:,i] * retreating_people_fraction / (1.0 - total_removed_fraction)
+            self.annual_proactive_people_retreat[:,i] = (self.coastal_population[:,i] - self.annual_reactive_people_retreat[:,i]) \
+                                                         * retreating_people_fraction / (1.0 - total_removed_fraction)
     
             # Total asset retreat is sum of reactive and proactive retreat
             self.annual_total_people_retreat[:,i] = self.annual_reactive_people_retreat[:,i] +  self.annual_proactive_people_retreat[:,i]
@@ -784,7 +793,7 @@ class SLRImpactModel:
             else: exposure_reduction = 1.0       
 
             # Subtract here the initial exposure fraction from current exposure fraction to get the SLR driven number
-            self.annual_people_flooded[:,i] = self.coastal_population[:,i] * np.maximum(0.0, 
+            self.annual_people_flooded[:,i] = (self.coastal_population[:,i] - self.annual_total_people_retreat[:,i]) * np.maximum(0.0, 
                     self.orig_exposed_people_fraction[:,i] * exposure_reduction - self.orig_exposed_people_fraction[:,0])
 
             self.annual_flood_fatalities[:,i] = self.flood_event_fatality_rate * (1.0 - self.storm_damage_resilience[:,i]) \
@@ -887,13 +896,13 @@ class SLRImpactModel:
 
             retreating_asset_fraction = self.willingness_to_retreat[:,i] \
                                           *  np.maximum(0, np.maximum(expected_exposed_fraction - self.orig_exposed_asset_fraction[:,0],
-                                                expected_inundated_fraction - total_removed_fraction))     
+                                                                      expected_inundated_fraction) - total_removed_fraction)
 
 
             if i==0: self.retreated_original_asset_fraction[:,i] = self.retreated_original_asset_fraction[:,0] + retreating_asset_fraction
             else: self.retreated_original_asset_fraction[:,i] = self.retreated_original_asset_fraction[:,i-1] + retreating_asset_fraction
     
-            self.annual_proactive_asset_retreat[:,i] = self.coastal_assets[:,i] * retreating_asset_fraction / (1.0 - total_removed_fraction)
+            self.annual_proactive_asset_retreat[:,i] = (self.coastal_assets[:,i] - self.annual_reactive_asset_retreat[:,i]) * retreating_asset_fraction / (1.0 - total_removed_fraction)
     
             # Total asset retreat is sum of reactive and proactive retreat
             self.annual_total_asset_retreat[:,i] = self.annual_reactive_asset_retreat[:,i] + self.annual_proactive_asset_retreat[:,i]
@@ -919,9 +928,9 @@ class SLRImpactModel:
             else: exposure_reduction = 1.0
             
             # Subtract here the initial exposure fraction from current exposure fraction to get the SLR driven number
-            self.annual_storm_damage_to_assets[:,i] = self.coastal_assets[:,i] *self.flood_event_damage_fraction \
-                                              * (1.0 - self.storm_damage_resilience[:,i]) * np.maximum(0.0, 
-                                              self.orig_exposed_asset_fraction[:,i] * exposure_reduction - self.orig_exposed_asset_fraction[:,0])
+            self.annual_storm_damage_to_assets[:,i] = (self.coastal_assets[:,i] - self.annual_total_asset_retreat[:,i]) \
+                                                       *self.flood_event_damage_fraction * (1.0 - self.storm_damage_resilience[:,i]) * np.maximum(0.0, 
+                                                         self.orig_exposed_asset_fraction[:,i] * exposure_reduction - self.orig_exposed_asset_fraction[:,0])
 
 
 
@@ -1018,8 +1027,8 @@ class SLRImpactModel:
         
         #### Updating the value of land using a formula from CIAM repository
         self.landvalue_appreciation_factor[:,i+1] = self.landvalue_appreciation_factor[:,i] \
-                    * np.exp(0.565 * (self.coastal_GDPperCapita[:,i+1]/self.coastal_GDPperCapita[:,i] - 1.0) \
-                            + 0.313 * (self.coastal_population[:,i+1]/self.coastal_population[:,i] - 1.0) )
+                * np.exp(0.565 * (self.coastal_GDPperCapita[:,i+1]/self.coastal_GDPperCapita[:,i] - 1.0) \
+                        + 0.313 * (self.coastal_population[:,i+1]/self.coastal_population[:,i] - 1.0) )
 
         # The net global flood height 
         self.effective_flood_height[:,i+1] = (self.SLR[:,i+1]-self.SLR[:,0]) - (self.average_fp_height[:,i+1] - self.average_fp_height[:,0])
@@ -1030,7 +1039,7 @@ class SLRImpactModel:
         else: dh = 0
 
         for iparam, param in enumerate(self.parameters):
-            self.variables[iparam][:,i+1] = self.__fitted_variable(dflood,dh,param)
+            self.variables[iparam][:,i+1] = self.__fitted_variable(dflood,dh,param, limit=self.limits[iparam])
 
         return
 
