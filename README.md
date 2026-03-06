@@ -2,7 +2,7 @@
 
 # FRISIA
 
-FRISIA is the *Feedback-based knowledge Repository for Intergrated assessments of Sea level rise Impacts and Adaptation*. Its first published version 1.0 is fully described in [Ramme et al. (preprint)](https://egusphere.copernicus.org/preprints/2025/egusphere-2025-1875/). FRISIAv1.0 is developed as part of the new integrated assessment model [FRIDA](https://github.com/metno/WorldTransFRIDA) within the [WorldTrans project](https://worldtrans-horizon.eu/) of the Horizon Europe research and innovation programs under grant agreement no. 101081661.
+FRISIA is the *Feedback-based knowledge Repository for Intergrated assessments of Sea level rise Impacts and Adaptation*. Its first published version 1.0 is fully described in [Ramme et al. (2025)](https://gmd.copernicus.org/articles/18/10017/2025/). FRISIAv1.0 is developed as part of the new integrated assessment model [FRIDA](https://github.com/metno/WorldTransFRIDA) within the [WorldTrans project](https://worldtrans-horizon.eu/) of the Horizon Europe research and innovation programs under grant agreement no. 101081661.
 
 ## Quick start
 Setting up the enviroment using conda (e.g. [miniconda](https://docs.anaconda.com/miniconda/) or [miniforge](https://github.com/conda-forge/miniforge)). This requires a python version >= 3.8.3 (versions beyond 3.10.10 have not been tested).
@@ -174,7 +174,7 @@ FRISIA is coupled to the [FRIDA model](https://github.com/metno/WorldTransFRIDA)
 
 
 ## Model description
-For a full documentation of the model implementation, we refer the user to [Ramme et al., 2025](https://doi.org/10.5194/egusphere-2025-1875).
+For a full documentation of the model implementation, we refer the user to [Ramme et al., 2025](https://gmd.copernicus.org/articles/18/10017/2025/).
 
 ### FRISIA sea-level rise module
 The sea-level rise (SLR) component of FRISIA is largely based on MAGICC (Nauels et al., 2017) and BRICK (Wong et al., 2017). It calculates SLR from five different components (thermosteric, land water storage, mountain glacier, Greenland ice sheet, Antarctic ice sheet). 
@@ -214,7 +214,7 @@ The impacts and adaptation module is a substantially modified, aggregated versio
 ## How to cite:
 Please cite the following paper for any reference to FRISIA.
 
-Ramme, L., Blanz, B., Wells, C., Wong, T. E., Schoenberg, W., Smith, C., and Li, C.: Feedback-based sea level rise impact modelling for integrated assessment models with FRISIAv1.0, EGUsphere [preprint], https://doi.org/10.5194/egusphere-2025-1875, 2025
+Ramme, L., Blanz, B., Wells, C., Wong, T. E., Schoenberg, W., Smith, C., and Li, C.: Feedback-based sea level rise impact modelling for integrated assessment models with FRISIAv1.0, Geosci. Model Dev., 18, 10017–10052, https://doi.org/10.5194/gmd-18-10017-2025, 2025.
 
 
 ## References:
