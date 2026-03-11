@@ -559,7 +559,7 @@ class SLRImpactModel:
         self.coastal_population = np.copy(self.population)
         self.coastal_assets = np.copy(self.assets) * self.USD_fac
         self.coastal_GDP = np.copy(self.GDP) * self.USD_fac
-        self.coastal_GDPperCapita = self.GDP / self.population
+        self.coastal_GDPperCapita = self.GDP * self.USD_fac / self.population
 
         # Calculating flood damage resilience as in CIAM, depending on GDP per capita
         self.storm_damage_resilience[:,0] = self.coastal_GDPperCapita[:,0] / (self.coastal_GDPperCapita[:,0] + self.ypc_US_2010)
@@ -908,9 +908,8 @@ class SLRImpactModel:
             self.annual_total_asset_retreat[:,i] = self.annual_reactive_asset_retreat[:,i] + self.annual_proactive_asset_retreat[:,i]
 
             if self.dbg==1: print('        proactive retreat done')
-        
 
-           ##########################################################################################
+            ##########################################################################################
             ###
             ### STORM DAMAGE to assets
             ###
@@ -934,7 +933,9 @@ class SLRImpactModel:
 
 
 
-            if self.dbg==1: print('        damage calculation done')            
+            if self.dbg==1: print('        damage calculation done')
+        else:
+            total_removed_fraction = 0.0
         ##########################################################################################
         ###
         ### GROWTH of assets.
@@ -945,14 +946,19 @@ class SLRImpactModel:
         # -> Less growth if it is expected that net flood height will increase (or is already high)
         expected_effective_flood_height = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i] \
                                             - self.potential_fp_height_increase_over_50_years[:,i]
-        expected_susceptible_fraction = self.fit_function(expected_effective_flood_height, self.storm_suscept_params_assets)
+        if self.include_failing_protection:  dh = self.average_fp_height[:,i] + self.potential_fp_height_increase_over_50_years[:,i] \
+                                                     - self.average_fp_height[:,0]
+        else: dh = 0
+        expected_orig_susceptible_fraction = self.__fitted_variable(expected_effective_flood_height, self.storm_suscept_params_assets)
+        expected_actual_susceptible_fraction = (expected_orig_susceptible_fraction - total_removed_fraction) \
+                                                / (1.0 - total_removed_fraction)
 
         if self.include_reduced_growth and self.damage:
             dflood =  np.maximum(0, self.expected_SLR_in_50_years[:,i] + self.effective_flood_height[:,i]\
                                      - self.potential_fp_height_increase_over_50_years[:,i])
             self.likelihood_of_investment_in_coastal_zones[:,i] = (1.0 - np.maximum(0, dflood / (dflood \
-                                            + self.effective_flood_height_at_which_investment_is_halved ))) * expected_susceptible_fraction \
-                                            + (1.0 - expected_susceptible_fraction)
+                                            + self.effective_flood_height_at_which_investment_is_halved ))) * expected_actual_susceptible_fraction \
+                                            + (1.0 - expected_actual_susceptible_fraction)
         else:
             self.likelihood_of_investment_in_coastal_zones[:,i] = 1.0
 
