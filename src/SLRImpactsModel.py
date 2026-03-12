@@ -949,7 +949,7 @@ class SLRImpactModel:
         if self.include_failing_protection:  dh = self.average_fp_height[:,i] + self.potential_fp_height_increase_over_50_years[:,i] \
                                                      - self.average_fp_height[:,0]
         else: dh = 0
-        expected_orig_susceptible_fraction = self.__fitted_variable(expected_effective_flood_height, self.storm_suscept_params_assets)
+        expected_orig_susceptible_fraction = self.__fitted_variable(expected_effective_flood_height, dh, self.storm_suscept_params_assets)
         expected_actual_susceptible_fraction = (expected_orig_susceptible_fraction - total_removed_fraction) \
                                                 / (1.0 - total_removed_fraction)
 
