@@ -1,4 +1,4 @@
-# © Lennart Ramme, MPI-M, 2024
+# © Lennart Ramme, MPI-M, 2024-2026
 
 import numpy as np
 import sys
@@ -131,6 +131,9 @@ class SLRImpactModel:
         # Include the effect of retreat leading to reduced storm surge exposure?
         self.include_retreat_exposure_reduction = True
 
+        # Include productivity losses from annually flooded people in GDP calculation?
+        self.include_productivity_feedback = True
+
 
 
 
@@ -167,6 +170,11 @@ class SLRImpactModel:
         # Elasticity of coastal GDP per capita with respect to coastal asset intensity
         self.gdp_asset_elasticity = 0.35
         self.gdp_asset_elasticity_range = (0.2, 0.6)
+
+        # Relative productivity of fully flood-affected workers compared to unaffected workers.
+        # 1.0 means no productivity loss; values in [0.9, 0.99] imply a 1-10% reduction.
+        self.relative_worker_productivity_if_flooded = 0.96
+        self.relative_worker_productivity_if_flooded_range = (0.9, 0.99)
 
         # Calibration parameter for reduced investment in unprotected coastal zones
         self.coastal_asset_depreciation_time_scale = 30.
@@ -315,7 +323,9 @@ class SLRImpactModel:
         self.surge1_inundated_area                     = np.zeros((self.nreg, self.nyears))
         self.surge1_inundated_original_asset_fraction  = np.zeros((self.nreg, self.nyears))
         self.surge1_inundated_original_people_fraction = np.zeros((self.nreg, self.nyears))
-        
+
+        # GDP productivity feedback diagnostics
+        self.annual_GDP_loss_from_productivity_effect = np.zeros((self.nreg, self.nyears))
         ################################################################################
         #### Initial values and fit parameters for pre-defined model versions ##########
         ################################################################################
@@ -485,6 +495,7 @@ class SLRImpactModel:
         self.proactive_retreat_time_scale                          = self. __update_single_param(self.proactive_retreat_time_scale_range, np.random.rand())
         self.susceptibility_reduction_exponent                     = self. __update_single_param(self.susceptibility_reduction_exponent_range, np.random.rand())
         self.gdp_asset_elasticity                                  = self. __update_single_param(self.gdp_asset_elasticity_range, np.random.rand())
+        self.relative_worker_productivity_if_flooded               = self. __update_single_param(self.relative_worker_productivity_if_flooded_range, np.random.rand())
         self.maximum_fp_deterioration_rate                         = self. __update_single_param(self.maximum_fp_deterioration_rate_range, np.random.rand())
         self.retreat_sensitivity                                   = self. __update_single_param(self.retreat_sensitivity_range, np.random.rand())
         return
@@ -511,6 +522,7 @@ class SLRImpactModel:
                 np.copy(self.proactive_retreat_time_scale),
                 np.copy(self.susceptibility_reduction_exponent),
                 np.copy(self.gdp_asset_elasticity),
+                np.copy(self.relative_worker_productivity_if_flooded),
                 np.copy(self.maximum_fp_deterioration_rate),
                 np.copy(self.retreat_sensitivity),
             ]
@@ -537,8 +549,10 @@ class SLRImpactModel:
         self.proactive_retreat_time_scale                           = InputParameters[17]
         self.susceptibility_reduction_exponent                      = InputParameters[18]
         self.gdp_asset_elasticity                                   = InputParameters[19]
-        self.maximum_fp_deterioration_rate                          = InputParameters[20]
-        self.retreat_sensitivity                                    = InputParameters[21]
+        self.relative_worker_productivity_if_flooded                = InputParameters[20]
+        self.maximum_fp_deterioration_rate                          = InputParameters[21]
+        self.retreat_sensitivity                                    = InputParameters[22]
+
         return
 
 
@@ -1069,11 +1083,28 @@ class SLRImpactModel:
 
             ref_tfp = self.__safe_divide(ref_gdp, ref_effective_inputs, default=0.0)
 
-            self.coastal_GDP[:,i+1] = self.__cobb_douglas_output(
+            # Baseline GDP without productivity feedback (for diagnostics and counterfactual loss)
+            gdp_without_productivity_feedback = self.__cobb_douglas_output(
                 ref_tfp,
                 self.coastal_assets[:,i+1],
                 self.coastal_population[:,i+1],
                 self.gdp_asset_elasticity
+            )
+
+            if self.include_productivity_feedback:
+                flooded_people_fraction = self.__safe_divide(
+                    self.annual_people_flooded[:,i],
+                    self.coastal_population[:,i],
+                    default=0.0
+                )
+                productivity_multiplier = 1.0 - (1.0 - self.relative_worker_productivity_if_flooded) * flooded_people_fraction
+            else:
+                productivity_multiplier = np.ones(self.nreg)
+
+            self.coastal_GDP[:,i+1] = gdp_without_productivity_feedback * productivity_multiplier
+            self.annual_GDP_loss_from_productivity_effect[:,i+1] = np.maximum(
+                0.0,
+                gdp_without_productivity_feedback - self.coastal_GDP[:,i+1]
             )
 
             self.coastal_GDPperCapita[:,i+1] = self.__safe_divide(
@@ -1083,6 +1114,7 @@ class SLRImpactModel:
             )
         else:
             self.coastal_GDP[:,i+1] = self.GDP[:,i+1] * self.USD_fac
+            self.annual_GDP_loss_from_productivity_effect[:,i+1] = 0.0
             self.coastal_GDPperCapita[:,i+1] = self.__safe_divide(
                 self.coastal_GDP[:,i+1],
                 self.coastal_population[:,i+1],
@@ -1227,6 +1259,7 @@ class SLRImpactModel:
 
     def getTotalPeopleFlooded(self): return np.sum(self.annual_people_flooded, axis=0)
     def getTotalFloodFatalities(self): return np.sum(self.annual_flood_fatalities, axis=0)
+    def getTotalAnnualGDPLossFromProductivityEffect(self): return np.sum(self.annual_GDP_loss_from_productivity_effect, axis=0)
     
 
 
