@@ -176,6 +176,16 @@ class SLRImpactModel:
         self.relative_worker_productivity_if_flooded = 0.96
         self.relative_worker_productivity_if_flooded_range = (0.9, 0.99)
 
+        # Relative productivity of fully storm-exposed assets compared to unaffected assets.
+        # 1.0 means no productivity loss; values in [0.9, 0.99] imply a 1-10% reduction.
+        self.relative_asset_productivity_if_exposed = 0.96
+        self.relative_asset_productivity_if_exposed_range = (0.9, 0.99)
+
+        # Sensitivity of coastal investment to GDP shortfall from productivity effects.
+        # inv_scale = (coastal_GDP / reference_GDP) ** eta, with capping.
+        self.eta_productivity_to_investment = 1.0
+        self.eta_productivity_to_investment_range = (0.0, 1.0)
+
         # Calibration parameter for reduced investment in unprotected coastal zones
         self.coastal_asset_depreciation_time_scale = 30.
         self.coastal_asset_depreciation_time_scale_range = (20.,40.)
@@ -291,6 +301,7 @@ class SLRImpactModel:
         
         ### Asset variables
         self.annual_storm_damage_to_assets             = np.zeros((self.nreg, self.nyears))
+        self.annual_assets_exposed_to_storm_surges     = np.zeros((self.nreg, self.nyears))
         self.storm_damage_resilience                   = np.zeros((self.nreg, self.nyears))
         self.landvalue_appreciation_factor             = np.ones((self.nreg, self.nyears))
         self.likelihood_of_investment_in_coastal_zones = np.zeros((self.nreg, self.nyears))
@@ -496,6 +507,8 @@ class SLRImpactModel:
         self.susceptibility_reduction_exponent                     = self. __update_single_param(self.susceptibility_reduction_exponent_range, np.random.rand())
         self.gdp_asset_elasticity                                  = self. __update_single_param(self.gdp_asset_elasticity_range, np.random.rand())
         self.relative_worker_productivity_if_flooded               = self. __update_single_param(self.relative_worker_productivity_if_flooded_range, np.random.rand())
+        self.relative_asset_productivity_if_exposed                = self. __update_single_param(self.relative_asset_productivity_if_exposed_range, np.random.rand())
+        self.eta_productivity_to_investment                        = self. __update_single_param(self.eta_productivity_to_investment_range, np.random.rand())
         self.maximum_fp_deterioration_rate                         = self. __update_single_param(self.maximum_fp_deterioration_rate_range, np.random.rand())
         self.retreat_sensitivity                                   = self. __update_single_param(self.retreat_sensitivity_range, np.random.rand())
         return
@@ -523,6 +536,8 @@ class SLRImpactModel:
                 np.copy(self.susceptibility_reduction_exponent),
                 np.copy(self.gdp_asset_elasticity),
                 np.copy(self.relative_worker_productivity_if_flooded),
+                np.copy(self.relative_asset_productivity_if_exposed),
+                np.copy(self.eta_productivity_to_investment),
                 np.copy(self.maximum_fp_deterioration_rate),
                 np.copy(self.retreat_sensitivity),
             ]
@@ -550,8 +565,10 @@ class SLRImpactModel:
         self.susceptibility_reduction_exponent                      = InputParameters[18]
         self.gdp_asset_elasticity                                   = InputParameters[19]
         self.relative_worker_productivity_if_flooded                = InputParameters[20]
-        self.maximum_fp_deterioration_rate                          = InputParameters[21]
-        self.retreat_sensitivity                                    = InputParameters[22]
+        self.relative_asset_productivity_if_exposed                 = InputParameters[21]
+        self.eta_productivity_to_investment                         = InputParameters[22]
+        self.maximum_fp_deterioration_rate                          = InputParameters[23]
+        self.retreat_sensitivity                                    = InputParameters[24]
 
         return
 
@@ -975,10 +992,15 @@ class SLRImpactModel:
                         (actually_susceptible_asset_fraction/self.orig_susceptible_asset_fraction[:,i])**self.susceptibility_reduction_exponent)
             else: exposure_reduction = 1.0
             
-            # Subtract here the initial exposure fraction from current exposure fraction to get the SLR driven number
-            self.annual_storm_damage_to_assets[:,i] = (self.coastal_assets[:,i] - self.annual_total_asset_retreat[:,i]) \
-                                                       *self.flood_event_damage_fraction * (1.0 - self.storm_damage_resilience[:,i]) * np.maximum(0.0, 
-                                                         self.orig_exposed_asset_fraction[:,i] * exposure_reduction - self.orig_exposed_asset_fraction[:,0])
+            # Subtract here the initial exposure fraction from current exposure fraction to get the SLR-driven exposure
+            storm_exposure_fraction = np.maximum(0.0,
+                self.orig_exposed_asset_fraction[:,i] * exposure_reduction - self.orig_exposed_asset_fraction[:,0]
+            )
+            self.annual_assets_exposed_to_storm_surges[:,i] = (self.coastal_assets[:,i] - self.annual_total_asset_retreat[:,i]) \
+                                                                * storm_exposure_fraction
+
+            self.annual_storm_damage_to_assets[:,i] = self.annual_assets_exposed_to_storm_surges[:,i] \
+                                                       * self.flood_event_damage_fraction * (1.0 - self.storm_damage_resilience[:,i])
 
 
 
@@ -1020,6 +1042,16 @@ class SLRImpactModel:
         reference_asset_growth = self.coastal_assets[:,i] * (self.assets[:,i+1] / self.assets[:,i] - 1.0)
         asset_depreciation = self.coastal_assets[:,i] / self.coastal_asset_depreciation_time_scale
         asset_investment = reference_asset_growth + asset_depreciation
+
+        # Under productivity feedback, lower GDP can dampen next-year coastal investment.
+        # Apply only to investment (not depreciation), with capped scaling.
+        if self.include_productivity_feedback:
+            reference_gdp_current = self.GDP[:,i] * self.USD_fac
+            gdp_ratio = self.__safe_divide(self.coastal_GDP[:,i], reference_gdp_current, default=1.0)
+            gdp_ratio = np.clip(gdp_ratio, 1e-6, None)
+            inv_scale = np.power(gdp_ratio, self.eta_productivity_to_investment)
+            inv_scale = np.clip(inv_scale, 0.5, 1.1)
+            asset_investment = asset_investment * inv_scale
 
         # initialising some arrays for investment redistribution
         actual_asset_investment = np.copy(asset_investment)
@@ -1097,7 +1129,16 @@ class SLRImpactModel:
                     self.coastal_population[:,i],
                     default=0.0
                 )
-                productivity_multiplier = 1.0 - (1.0 - self.relative_worker_productivity_if_flooded) * flooded_people_fraction
+                
+                exposed_asset_fraction = self.__safe_divide(
+                    self.annual_assets_exposed_to_storm_surges[:,i],
+                    self.coastal_assets[:,i],
+                    default=0.0
+                )
+
+                worker_productivity_multiplier = 1.0 - (1.0 - self.relative_worker_productivity_if_flooded) * flooded_people_fraction
+                asset_productivity_multiplier = 1.0 - (1.0 - self.relative_asset_productivity_if_exposed) * exposed_asset_fraction
+                productivity_multiplier = worker_productivity_multiplier * asset_productivity_multiplier
             else:
                 productivity_multiplier = np.ones(self.nreg)
 
