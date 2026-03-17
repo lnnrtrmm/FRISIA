@@ -789,33 +789,12 @@ class SLRImpactModel:
             else: 
                 dh = 0.0
 
-            if self.include_retreat_exposure_reduction:
-                # Update the susceptible fraction based on previous retreat
-                # Storm damage to people is depending on what is the actually susceptible fraction of people. 
-                # This has to account for the fraction of people that is generally susceptible and the fraction
-                # of people that has already been removed from the coast (via inundation or retreat)
-                expected_orig_sus_people_fraction = self.__fitted_variable(expected_effective_flood_height,
-                                                                                   dh, self.storm_suscept_params_people)
-        
-                expected_actual_sus_people_fraction = np.maximum(0, (expected_orig_sus_people_fraction - total_removed_fraction) \
-                                                              / (1.0 - total_removed_fraction))
+            # Approximate uncertainty around proactive retreat as being bounded by expected annually exposed and expected susceptible fraction
+            lower_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.surge1_inund_params_people)
+            upper_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.storm_suscept_params_people)
+            retreating_orig_people_fraction = lower_bound + self.retreat_sensitivity * (upper_bound - lower_bound)
 
-                exposure_reduction = np.where(expected_orig_sus_people_fraction == 0, 0, 
-                        (expected_actual_sus_people_fraction/expected_orig_sus_people_fraction)**self.susceptibility_reduction_exponent)
-            else:
-                exposure_reduction = 1.0
-
-            # Expected exposure fraction of original distribution times the reduction factor to account for previous retreat
-            expected_exposed_fraction = self.__fitted_variable(expected_effective_flood_height, dh, self.storm_exposure_params_people) \
-                                        * exposure_reduction
-
-            lower_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.inund_params_people)
-            upper_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.surge1_inund_params_people)
-            expected_inundated_fraction = np.minimum(1.0, lower_bound + self.retreat_sensitivity * (upper_bound - lower_bound))
-
-            retreating_people_fraction = self.willingness_to_retreat[:,i] \
-                    *  np.maximum(0, np.maximum(expected_exposed_fraction - self.orig_exposed_people_fraction[:,0],
-                                                expected_inundated_fraction - total_removed_fraction))
+            retreating_people_fraction = self.willingness_to_retreat[:,i]  *  np.maximum(0, retreating_orig_people_fraction - total_removed_fraction)
             
             # Safeguard against retreating too many people
             retreating_people_fraction = np.minimum(retreating_people_fraction, 1.0 - total_removed_fraction)
@@ -826,7 +805,7 @@ class SLRImpactModel:
             upper_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.surge1_inund_params_area, limit=None)
             expected_inundated_land = lower_bound + self.retreat_sensitivity * (upper_bound - lower_bound)
             current_inundated_land = self.__calc_autonomous_retreat_fraction(i,'area')
-            self.abandoned_area[:,i] = current_inundated_land + self.willingness_to_retreat[:,i] * (expected_inundated_land - current_inundated_land) \
+            self.abandoned_area[:,i] = current_inundated_land + self.willingness_to_retreat[:,i] * (expected_inundated_land - current_inundated_land)
 
             if i==0: self.retreated_original_people_fraction[:,i] = self.retreated_original_people_fraction[:,0] + retreating_people_fraction
             else: self.retreated_original_people_fraction[:,i] = self.retreated_original_people_fraction[:,i-1] + retreating_people_fraction
@@ -931,36 +910,13 @@ class SLRImpactModel:
             else: 
                 dh = 0.0
 
+            # Approximate uncertainty around proactive retreat as being bounded by expected annually exposed and expected susceptible fraction
+            lower_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.surge1_inund_params_assets)
+            upper_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.storm_suscept_params_assets)
+            retreating_orig_asset_fraction = lower_bound + self.retreat_sensitivity * (upper_bound - lower_bound)
 
-            if self.include_retreat_exposure_reduction:
-                # Update the susceptible fraction based on previous retreat
-                # Storm damage to people is depending on what is the actually susceptible fraction of people. 
-                # This has to account for the fraction of people that is generally susceptible and the fraction
-                # of people that has already been removed from the coast (via inundation or retreat)
-                expected_orig_sus_asset_fraction = self.__fitted_variable(expected_effective_flood_height,
-                                                                                   dh, self.storm_suscept_params_assets)
-        
-                expected_actual_sus_asset_fraction = np.maximum(0, (expected_orig_sus_asset_fraction - total_removed_fraction) \
-                                                              / (1.0 - total_removed_fraction))
-
-                exposure_reduction = np.where(expected_orig_sus_asset_fraction == 0, 0, 
-                        (expected_actual_sus_asset_fraction/expected_orig_sus_asset_fraction)**self.susceptibility_reduction_exponent)
-            else: exposure_reduction = 1.0
-
-
-
-            # Expected exposure fraction of original distribution times the reduction factor to account for previous retreat
-            expected_exposed_fraction = self.__fitted_variable(expected_effective_flood_height, dh, self.storm_exposure_params_assets) \
-                                        * exposure_reduction
-
-            lower_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.inund_params_assets)
-            upper_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.surge1_inund_params_assets)
-            expected_inundated_fraction = np.minimum(1.0, lower_bound + self.retreat_sensitivity * (upper_bound - lower_bound))
-
-            retreating_asset_fraction = self.willingness_to_retreat[:,i] \
-                                          *  np.maximum(0, np.maximum(expected_exposed_fraction - self.orig_exposed_asset_fraction[:,0],
-                                                                      expected_inundated_fraction - total_removed_fraction))
-
+            retreating_asset_fraction = self.willingness_to_retreat[:,i]  *  np.maximum(0, retreating_orig_asset_fraction - total_removed_fraction)
+            
             # Safeguard against retreating too many assets
             retreating_asset_fraction = np.minimum(retreating_asset_fraction, 1.0 - total_removed_fraction)
 
