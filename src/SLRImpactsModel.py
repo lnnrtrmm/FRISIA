@@ -14,6 +14,8 @@ SLIIDERS_versions = ['SLIIDERS_global',
                      'SLIIDERS_PopDens100_lim0']
 
 class SLRImpactModel:
+    _STATIC_INPUT_CACHE = {}
+
     '''
     This is the impacts and adaptation module of FRISIA
 
@@ -346,31 +348,6 @@ class SLRImpactModel:
         # and fit parameters used to match aggregated infomation for inundation,
         # susceptibility and surge exposure etc.
 
-        ### Loading the general aggregated information
-        path = input_path+'aggregated_data/'
-        df = pd.read_csv(path+self.version+'_information.csv', delimiter=',')
-        
-        # The factor multiplied with SLR_total to get regional SLR. Only used in case the individual components are not given
-        # so that regional SLR has to be fitted linearly to total global SLR
-        self.SLR_factor              = df.SLR_factor.values[:]
-        # The weights of the individual SLR components for each region to get regional SLR (in case this is activated).
-        # Not included are thermosteric and LWS SLR, because weights are 1 in BRICK.
-        self.SLR_weight_MG           = df.SLR_weight_MG.values[:]   
-        self.SLR_weight_GIS          = df.SLR_weight_GIS.values[:]  
-        self.SLR_weight_AIS          = df.SLR_weight_AIS.values[:]
-        
-        # Information on the coastal regions
-        self.average_fp_height_init  = df.average_fp_height.values[:]
-        self.total_fp_length         = df.total_fp_length.values[:]
-        self.mobile_asset_fraction   = df.mobcapfrac.values[:,np.newaxis]
-
-        # Information on coastal surge heights
-        self.surge_heights = np.ones((self.nreg,4))
-        self.surge_heights[:,0] = df.surge1_height.values[:]
-        self.surge_heights[:,1] = df.surge10_height.values[:]
-        self.surge_heights[:,2] = df.surge100_height.values[:]
-        self.surge_heights[:,3] = df.surge1000_height.values[:]
-
         ### Loading in the fit parameters
         # 2 cases (parameters with and without initial flood protection), 4 parameters and X regions
         self.inund_params_area            = np.zeros((2,4,self.nreg))
@@ -398,22 +375,70 @@ class SLRImpactModel:
                                 'storm_suscept_params_assets', 'storm_suscept_params_people',
                                 'storm_exposure_params_assets', 'storm_exposure_params_people']
 
-        path = input_path+'fit_function_parameters/'
+        cache_key = (input_path, self.version, self.nreg)
+        cached = SLRImpactModel._STATIC_INPUT_CACHE.get(cache_key)
+
+        if cached is None:
+            info_path = input_path + 'aggregated_data/'
+            df_info = pd.read_csv(info_path + self.version + '_information.csv', delimiter=',')
+
+            surge_heights = np.ones((self.nreg, 4))
+            surge_heights[:, 0] = df_info.surge1_height.values[:]
+            surge_heights[:, 1] = df_info.surge10_height.values[:]
+            surge_heights[:, 2] = df_info.surge100_height.values[:]
+            surge_heights[:, 3] = df_info.surge1000_height.values[:]
+
+            fit_parameters = np.zeros((len(filenames_extensions), 2, 4, self.nreg))
+            fit_path = input_path + 'fit_function_parameters/'
+            for iparam in range(len(filenames_extensions)):
+                # Fits including the initial flood protection
+                # Here, the data were fitted using a logistic function: y = A / (1 + exp(-k*(x-x0)))
+                df = pd.read_csv(fit_path + self.version + '_' + filenames_extensions[iparam] + '.csv', delimiter=',')
+                fit_parameters[iparam, 0, 0, :] = df.k.values[:]
+                fit_parameters[iparam, 0, 1, :] = df.x0.values[:]
+                fit_parameters[iparam, 0, 2, :] = df.A.values[:]
+                fit_parameters[iparam, 0, 3, :] = df.c.values[:]
+
+                # Fits without initial flood protection, same function as above
+                df = pd.read_csv(fit_path + self.version + '_' + filenames_extensions[iparam] + '_no_initial_dikes.csv', delimiter=',')
+                fit_parameters[iparam, 1, 0, :] = df.k.values[:]
+                fit_parameters[iparam, 1, 1, :] = df.x0.values[:]
+                fit_parameters[iparam, 1, 2, :] = df.A.values[:]
+                fit_parameters[iparam, 1, 3, :] = df.c.values[:]
+
+            cached = {
+                'SLR_factor': df_info.SLR_factor.values[:],
+                'SLR_weight_MG': df_info.SLR_weight_MG.values[:],
+                'SLR_weight_GIS': df_info.SLR_weight_GIS.values[:],
+                'SLR_weight_AIS': df_info.SLR_weight_AIS.values[:],
+                'average_fp_height_init': df_info.average_fp_height.values[:],
+                'total_fp_length': df_info.total_fp_length.values[:],
+                'mobile_asset_fraction': df_info.mobcapfrac.values[:, np.newaxis],
+                'surge_heights': surge_heights,
+                'fit_parameters': fit_parameters,
+            }
+            SLRImpactModel._STATIC_INPUT_CACHE[cache_key] = cached
+
+        # The factor multiplied with SLR_total to get regional SLR. Only used in case the individual components are not given
+        # so that regional SLR has to be fitted linearly to total global SLR
+        self.SLR_factor = cached['SLR_factor'].copy()
+        # The weights of the individual SLR components for each region to get regional SLR (in case this is activated).
+        # Not included are thermosteric and LWS SLR, because weights are 1 in BRICK.
+        self.SLR_weight_MG = cached['SLR_weight_MG'].copy()
+        self.SLR_weight_GIS = cached['SLR_weight_GIS'].copy()
+        self.SLR_weight_AIS = cached['SLR_weight_AIS'].copy()
+
+        # Information on the coastal regions
+        self.average_fp_height_init = cached['average_fp_height_init'].copy()
+        self.total_fp_length = cached['total_fp_length'].copy()
+        self.mobile_asset_fraction = cached['mobile_asset_fraction'].copy()
+
+        # Information on coastal surge heights
+        self.surge_heights = cached['surge_heights'].copy()
+
+        fit_parameters = cached['fit_parameters']
         for iparam, parameter in enumerate(self.parameters):
-            # Fits including the initial flood protection
-            # Here, the data were fitted using a logistic function: y = A / (1 + exp(-k*(x-x0)))
-            df = pd.read_csv(path+self.version+'_'+filenames_extensions[iparam]+'.csv', delimiter=',')
-            parameter[0,0,:] = df.k.values[:]
-            parameter[0,1,:] = df.x0.values[:]
-            parameter[0,2,:] = df.A.values[:]
-            parameter[0,3,:] = df.c.values[:]
-            
-            # Fits without initial flood protection, same function as above
-            df = pd.read_csv(path+self.version+'_'+filenames_extensions[iparam]+'_no_initial_dikes.csv', delimiter=',')
-            parameter[1,0,:] = df.k.values[:]
-            parameter[1,1,:] = df.x0.values[:]
-            parameter[1,2,:] = df.A.values[:]
-            parameter[1,3,:] = df.c.values[:]
+            parameter[:, :, :] = fit_parameters[iparam, :, :, :]
 
         ################################################################################
         ################################################################################
