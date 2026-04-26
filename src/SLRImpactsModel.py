@@ -1,10 +1,21 @@
-# © Lennart Ramme, MPI-M, 2024
+# © Lennart Ramme, MPI-M, 2024-2026
 
 import numpy as np
 import sys
 import pandas as pd
+import warnings
+
+warnings.filterwarnings('error', category=RuntimeWarning)
+
+SLIIDERS_versions = ['SLIIDERS_global',
+                     'SLIIDERS_regional',
+                     'SLIIDERS_CapitalDens',
+                     'SLIIDERS_PopDens',
+                     'SLIIDERS_PopDens100_lim0']
 
 class SLRImpactModel:
+    _STATIC_INPUT_CACHE = {}
+
     '''
     This is the impacts and adaptation module of FRISIA
 
@@ -12,9 +23,10 @@ class SLRImpactModel:
     - global SLR or SLR components -> will be translated into coastal/regional population weighted SLR
     - global mean surface temperature anomaly -> for estimating the expected SLR in 50 years
     - total global CO2 emissions -> for estimating the expected SLR in 50 years
-    - GDP time series -> for reference growth
+    - asset time series -> for reference growth
     - population time series -> for reference growth
-    - Information on aggregation level (currently available: DIVA_global, DIVA_bipolar, DIVA_regional; see below)
+    - GDP time series -> for reference growth
+    - Information on aggregation level
 
 
     Abbreviatios used:
@@ -24,25 +36,33 @@ class SLRImpactModel:
     - ey: end year
     - dt: length of time step
     - dbg: debugging option
-    - ndim: number of regions, i.e. 1 for global, 2 for bipolar and 7 for DIVA_regional
+    - nreg: number of regions
     
     '''
 
 
 
-    def __init__(self, SLR_total, T, CO2emis, population, gdp, ndim=2, sy=2010, ey=2100, dt=1.0, dbg=0, damage=True, 
+    def __init__(self, SLR_total, T, CO2emis, population, gdp, assets=[],
+                 nreg=2, sy=2010, ey=2100, dt=1.0, dbg=0, damage=True, 
                  include_SLR_components=False, SLR_components=[], randomize=False,
-                 USDyear=2010, version='DIVA_global', include_initial_fp=True, input_path='../input/'):
+                 USDyear=2010, version='SLIIDERS_global', input_path='../input/'):
+
+
+        if version in SLIIDERS_versions: self.database = 'SLIIDERS'
+        else: sys.exit('Given version is not defined! '+version)
+        self.version = version
+
 
         # Timestep:
         self.sy = sy
         self.ey = ey
         self.dt = dt
+        # We assume that the final year ey, is included in the data
         self.nyears = int((self.ey - self.sy) / self.dt) + 1
-        self.time = np.linspace(self.sy+self.dt*0.5, self.ey-self.dt*0.5, self.nyears)
+        self.time = np.linspace(self.sy, self.ey, self.nyears)
 
         self.dbg = dbg
-        self.ndim = ndim
+        self.nreg = nreg
         self.randomize = randomize
 
         #### Set some global variables from input
@@ -53,13 +73,30 @@ class SLRImpactModel:
         self.T_anomaly = np.copy(T) # anomaly wrt 1750 in Kelvin
         self.CO2emis = np.copy(CO2emis) # GT C per year
 
+
+        #### Some checks and initial processing
         # GDP and population time series have to be region-specific!
-        # -> First dimension is region (ndim) and second dimension is time (nyears)
+        # -> First dimension is region (nreg) and second dimension is time (nyears)
         # -> These are only used for getting the (theoretical) internal growth rates
-        if population.ndim != 2 or gdp.ndim != 2:
-            sys.exit('Population or GDP arrays require ndim=2 (first dimension is number of coastal regions, second dimension is time)!')
+        if population.shape != (self.nreg, self.nyears) or gdp.shape != (self.nreg, self.nyears):
+            sys.exit('Population or GDP arrays require ndim=2 (nreg,ntime)!')
         self.population = np.copy(population) # Mio. people
         self.GDP = np.copy(gdp) # billion USD per year
+
+        # Same for asset timeseries, if it is provided
+        if len(assets) == 0:
+            self.assets = self.GDP * 3.0 # If assets are not given, assume constant asset/GDP ratio of 3 as in CIAM
+        else:
+            if assets.shape != (self.nreg, self.nyears):
+                sys.exit('Asset array requires ndim=2 (nreg,ntime)!')
+            self.assets = np.copy(assets)
+
+        if self.database == 'SLIIDERS':
+            # SLIIDERS data are in USD2019 PPP, but here we assume that all values are USD2010 initially
+            # (prior to conversion with USD_fac). Hence, rescale monetary input arrays with USD inflation rate 
+            # between 2010 and 2019 (17.2 %).
+            self.assets *= 1./1.172
+            self.GDP *= 1./1.172
 
 
 
@@ -69,31 +106,37 @@ class SLRImpactModel:
         ####################################################################################
 
         self.damage = damage
-        self.include_initial_fp = include_initial_fp
-        # This determines the type of fit that is used
-        if self.include_initial_fp: self.iFit = 0
-        else: self.iFit = 1
 
         self.willingness_to_invest_in_fp = 0.0 # [0,1] Can also be time-dependent array
         self.willingness_to_retreat = 0.0 # [0,1]
 
-        self.asset_feedback_switch = 0.0 # [0,1] Do storm damages reduce the value of coastal assets?
-        self.people_feedback_switch = 0.0 # [0,1] Do storm fatalities reduce the coastal population?
+        self.asset_feedback_switch = 1.0 # [0,1] Do storm damages reduce the value of coastal assets?
+        self.people_feedback_switch = 1.0 # [0,1] Do storm fatalities reduce the coastal population?
 
-        ### Switches to make model reproduce CIAM output (if all following switches == False)
+        # Will protection or retreat be against current SLR or against SLR in 50 years?
+        self.include_foresight_in_adaptation = True
+
         # Include reduced investment in coastal zones in case there will be increased flood heights in the future?
-        self.include_reduced_growth = False
+        self.include_reduced_growth = True
         # Include the possibility that assets are moved from unsafe to safe coastal zones (if above param is True)
         self.move_around_growth = True
 
         # Include maximum available money for flood protection as fraction of GDP?
-        self.include_fp_investment_cap = False
+        self.include_fp_investment_cap = True
+
+        # Include the possibility that raised flood protection is breached (i.e. protection is raised, but SLR is even faster)
+        self.include_failing_protection = True
 
         # Include the effect of asset reduction and changing population on GDP per capita?
-        self.include_gdp_effect = False
+        self.include_gdp_effect = True
 
         # Include the effect of retreat leading to reduced storm surge exposure?
-        self.include_retreat_exposure_reduction = False
+        self.include_retreat_exposure_reduction = True
+
+        # Include productivity losses from annually flooded people in GDP calculation?
+        self.include_productivity_feedback = True
+
+
 
 
         ####################################################################################
@@ -104,6 +147,7 @@ class SLRImpactModel:
         # which are based on CIAM values (if possible).
         #
         # Watch out: every new uncertainty parameter has to also be added to the randomisation routine
+        #            and the input & output routines of the uncertainty parameters
 
         #### Coastal population and asset evolution parameters
         # Flood fatalities as feedback from storm surges to population stock and for output
@@ -119,7 +163,34 @@ class SLRImpactModel:
         self.flood_event_damage_fraction = 0.3         # dmnl
         self.flood_event_damage_fraction_range = (0.2, 0.4)
 
+        # Determines how fast susceptibility is reduced under retreat
+        # A value of 1 means that all generally susceptible assets/people are equally likely to retreat.
+        # A higher value means that those that are more likely to be exposed will preferably retreat.
+        self.susceptibility_reduction_exponent = 1.5
+        self.susceptibility_reduction_exponent_range = (1.0, 2.0)   # dmnl
+
+        # Elasticity of coastal GDP per capita with respect to coastal asset intensity
+        self.gdp_asset_elasticity = 0.35
+        self.gdp_asset_elasticity_range = (0.2, 0.6)
+
+        # Relative productivity of fully flood-affected workers compared to unaffected workers.
+        # 1.0 means no productivity loss; values in [0.9, 0.99] imply a 1-10% reduction.
+        self.relative_worker_productivity_if_flooded = 0.96
+        self.relative_worker_productivity_if_flooded_range = (0.9, 0.99)
+
+        # Relative productivity of fully storm-exposed assets compared to unaffected assets.
+        # 1.0 means no productivity loss; values in [0.9, 0.99] imply a 1-10% reduction.
+        self.relative_asset_productivity_if_exposed = 0.96
+        self.relative_asset_productivity_if_exposed_range = (0.9, 0.99)
+
+        # Sensitivity of coastal investment to GDP shortfall from productivity effects.
+        # inv_scale = (coastal_GDP / reference_GDP) ** eta, with capping.
+        self.eta_productivity_to_investment = 1.0
+        self.eta_productivity_to_investment_range = (0.0, 1.0)
+
         # Calibration parameter for reduced investment in unprotected coastal zones
+        self.coastal_asset_depreciation_time_scale = 30.
+        self.coastal_asset_depreciation_time_scale_range = (20.,40.)
         self.effective_flood_height_at_which_investment_is_halved = 1.0                   # m
         self.effective_flood_height_at_which_investment_is_halved_range = (0.5, 3.0)
         self.safe_coastal_zone_likelihood_threshold = 0.95                          # dmnl
@@ -132,29 +203,31 @@ class SLRImpactModel:
         self.maximum_gdp_fraction_for_fp_investment_range = (0.01, 0.05)
         self.fp_construction_duration = 10.0                                # year
         self.fp_construction_duration_range = (5, 25)
-        self.fp_construction_cost_reference = 0.00602                       # b$/m^2/km, from CIAM
-        self.fp_construction_cost_reference_range = (0.005, 0.007)
+        self.fp_construction_cost_reference_USD2010 = 0.00602                       # b$/m^2/km, from CIAM
+        self.fp_construction_cost_reference_USD2010_range = (0.005, 0.007)
         self.maintenance_cost_fraction = 0.02                                             # 1/ year, from CIAM
         self.maintenance_cost_fraction_range = (0.015, 0.03)
-        self.coastal_land_value_init = 0.005376                             # b$/km^2, from CIAM
-        self.coastal_land_value_init_range = (0.005, 0.006)
+        self.coastal_land_value_init_USD2010 = 0.005376                             # b$/km^2, from CIAM
+        self.coastal_land_value_init_USD2010_range = (0.005, 0.006)
         self.land_opportunity_cost_rate = 0.04                              # 1/year, from CIAM
         self.land_opportunity_cost_rate_range = (0.03, 0.05)
+        self.maximum_fp_deterioration_rate = 0.05                           # m/year
+        self.maximum_fp_deterioration_rate_range = (0.02, 0.1)
 
 
         #### Retreat parameters; default from CIAM with added uncertainty ranges
-        self.mobile_asset_fraction = 0.25                                               # dmnl
-        self.mobile_asset_fraction_range = (0.2, 0.3)
         self.asset_relocation_cost_factor = 0.1                                         # dmnl
         self.asset_relocation_cost_factor_range = (0.05, 0.15)
         self.asset_demolition_cost_factor = 0.05                                        # dmnl
         self.asset_demolition_cost_factor_range = (0.025, 0.075)
         self.not_depreciated_fraction_of_assets_at_time_of_retreat = 0.1                # dmnl
         self.not_depreciated_fraction_of_assets_at_time_of_retreat_range = (0.0, 0.2)
-        self.increase_factor_for_costs_of_reactive_retreat = 4.0                        # dmnl
-        self.increase_factor_for_costs_of_reactive_retreat_range = (3.0, 5.0)
+        self.people_retreat_cost_factor = 8.0                                           # dmnl
+        self.people_retreat_cost_factor_range = (3.0, 10.9)                             # values as in DSCIM-Coastal, but extended to the lower end values of other studies
         self.proactive_retreat_time_scale = 10.                                         # year
-        self.proactive_retreat_time_scale_range = (5.0, 25.0)       
+        self.proactive_retreat_time_scale_range = (5.0, 25.0)
+        self.retreat_sensitivity = 0.5                                                  # dmnl
+        self.retreat_sensitivity_range = (0,1)                                          # 0: retreat when reached by mean regional sea level, 1: retreat when reached by 1-in-1 year return period height
 
         ########## Fixed parameters ######################
 
@@ -163,6 +236,7 @@ class SLRImpactModel:
         # Parameter values are from SLR model analysis.
         self.expSLR_sens_CO2emis = 0.0131  # m per Gt C
         self.expSLR_sens_Tano = 0.091      # m per K
+        self.expSLR_timeHorizon = 50.0
 
         # Calculating the construction cost index (cci) as a linear function fitted to CIAM data, bounded between 0.5 and 2.5
         self.fp_cci_fit_slope = 0.036853
@@ -171,20 +245,24 @@ class SLRImpactModel:
         self.fp_cci_max = 2.5
 
         # GDP per capita in the US in 2010 (reference for calculating damage resilience)
-        self.ypc_US_2010 = 54.41  # b$/Mp/year
+        self.ypc_US_2010_USD2010 = 54.41  # b$/Mp/year
 
+        # constant GDP parameters for now
+        self.max_gdp_pc_asset_factor = 3.0
 
         # USD conversion
         # Conversion in case that USD values should be for different year than 2010;
-        # all internal, default dollar values should be USD 2010.
+        # all internal, default dollar values are in USD 2010.
         # Provide the conversion factors for individual years. 
         # USD_fac can be overwritten before the integration in case other years are requested.
         if USDyear==2010:
             self.USD_fac = 1.0
-        elif USDyear==2017:
-            self.USD_fac = 1.1241
         elif USDyear==2005:
             self.USD_fac = 0.8957
+        elif USDyear==2017:
+            self.USD_fac = 1.1241
+        elif USDyear==2019:
+            self.USD_fac = 1.172
         elif USDyear==2022:
             self.USD_fac = 1.3421
         else:
@@ -193,193 +271,271 @@ class SLRImpactModel:
         ################################################################################
         ##########         Initialize arrays         ###################################
         ################################################################################
-        self.SLR                      = np.zeros((self.ndim, self.nyears))
-        self.expected_SLR_in_50_years = np.zeros((self.ndim, self.nyears))
+        self.SLR                      = np.zeros((self.nreg, self.nyears))
+        self.expected_SLR_in_50_years = np.zeros((self.nreg, self.nyears))
 
-        self.coastal_population       = np.zeros((self.ndim, self.nyears))
-        self.coastal_assets           = np.zeros((self.ndim, self.nyears))
-        self.coastal_GDP              = np.zeros((self.ndim, self.nyears))
-        self.coastal_GDPperCapita     = np.zeros((self.ndim, self.nyears))
-        
         ### Flood protection (fp) variables
-        self.average_fp_height                          = np.zeros((self.ndim, self.nyears))
-        self.annual_change_in_fp_height                 = np.zeros((self.ndim, self.nyears))
-        self.construction_cost                          = np.zeros((self.ndim, self.nyears))
-        self.effective_annual_investment_in_fp          = np.zeros((self.ndim, self.nyears))
-        self.potential_fp_height_increase_over_50_years = np.zeros((self.ndim, self.nyears))
-        self.fp_land_opportunity_cost                   = np.zeros((self.ndim, self.nyears))
-        self.annual_costs_of_fp_maintenance             = np.zeros((self.ndim, self.nyears))
-        self.annual_costs_of_fp_maintenance_noadapt     = np.zeros((self.ndim, self.nyears))
+        self.average_fp_height                                = np.zeros((self.nreg, self.nyears))
+        self.annual_increase_in_fp_height_from_investment     = np.zeros((self.nreg, self.nyears))
+        self.annual_reduction_in_fp_height_from_deterioration = np.zeros((self.nreg, self.nyears))
+        self.construction_cost                                = np.zeros((self.nreg, self.nyears))
+        self.effective_annual_investment_in_fp                = np.zeros((self.nreg, self.nyears))
+        self.potential_fp_height_increase_over_50_years       = np.zeros((self.nreg, self.nyears))
+        self.fp_land_opportunity_cost                         = np.zeros((self.nreg, self.nyears))
+        self.annual_costs_of_fp_maintenance                   = np.zeros((self.nreg, self.nyears))
+        self.annual_SLR_costs_of_fp_maintenance               = np.zeros((self.nreg, self.nyears))
+        self.mask_annual_fp_investment_limited                = np.zeros((self.nreg, self.nyears))
 
 
         ### Population variables
-        self.annual_people_flooded       = np.zeros((self.ndim, self.nyears))
-        self.annual_flood_fatalities     = np.zeros((self.ndim, self.nyears))
-        self.orig_susceptible_people_fraction = np.zeros((self.ndim, self.nyears))
-        self.orig_exposed_people_fraction     = np.zeros((self.ndim, self.nyears))
-        self.inundated_original_people_fraction   = np.zeros((self.ndim, self.nyears))
-        self.retreated_original_people_fraction   = np.zeros((self.ndim, self.nyears))
+        self.annual_people_flooded       = np.zeros((self.nreg, self.nyears))
+        self.annual_flood_fatalities     = np.zeros((self.nreg, self.nyears))
+        self.orig_susceptible_people_fraction = np.zeros((self.nreg, self.nyears))
+        self.orig_exposed_people_fraction     = np.zeros((self.nreg, self.nyears))
+        self.inundated_original_people_fraction   = np.zeros((self.nreg, self.nyears))
+        self.retreated_original_people_fraction   = np.zeros((self.nreg, self.nyears))
         # People retreat
-        self.annual_reactive_people_retreat  = np.zeros((self.ndim, self.nyears))
-        self.annual_proactive_people_retreat = np.zeros((self.ndim, self.nyears))
-        self.annual_total_people_retreat     = np.zeros((self.ndim, self.nyears))
-        self.people_retreat_cost             = np.zeros((self.ndim, self.nyears))
+        self.annual_reactive_people_retreat  = np.zeros((self.nreg, self.nyears))
+        self.annual_proactive_people_retreat = np.zeros((self.nreg, self.nyears))
+        self.annual_total_people_retreat     = np.zeros((self.nreg, self.nyears))
+        self.people_retreat_cost             = np.zeros((self.nreg, self.nyears))
         
         
         ### Asset variables
-        self.annual_storm_damage_to_assets             = np.zeros((self.ndim, self.nyears))
-        self.storm_damage_resilience                   = np.zeros((self.ndim, self.nyears))
-        self.landvalue_appreciation_factor             = np.ones((self.ndim, self.nyears))
-        self.likelihood_of_investment_in_coastal_zones = np.zeros((self.ndim, self.nyears))
-        self.orig_susceptible_asset_fraction           = np.zeros((self.ndim, self.nyears))
-        self.orig_exposed_asset_fraction               = np.zeros((self.ndim, self.nyears))
-        self.inundated_original_asset_fraction         = np.zeros((self.ndim, self.nyears))
-        self.retreated_original_asset_fraction         = np.zeros((self.ndim, self.nyears))
+        self.annual_storm_damage_to_assets             = np.zeros((self.nreg, self.nyears))
+        self.annual_assets_exposed_to_storm_surges     = np.zeros((self.nreg, self.nyears))
+        self.storm_damage_resilience                   = np.zeros((self.nreg, self.nyears))
+        self.landvalue_appreciation_factor             = np.ones((self.nreg, self.nyears))
+        self.likelihood_of_investment_in_coastal_zones = np.zeros((self.nreg, self.nyears))
+        self.orig_susceptible_asset_fraction           = np.zeros((self.nreg, self.nyears))
+        self.orig_exposed_asset_fraction               = np.zeros((self.nreg, self.nyears))
+        self.inundated_original_asset_fraction         = np.zeros((self.nreg, self.nyears))
+        self.retreated_original_asset_fraction         = np.zeros((self.nreg, self.nyears))
 
         # Asset retreat
-        self.annual_reactive_asset_retreat  = np.zeros((self.ndim, self.nyears))
-        self.annual_proactive_asset_retreat = np.zeros((self.ndim, self.nyears))
-        self.annual_total_asset_retreat     = np.zeros((self.ndim, self.nyears))
-        self.asset_demolition_cost          = np.zeros((self.ndim, self.nyears))
-        self.asset_relocation_cost          = np.zeros((self.ndim, self.nyears))
-        self.assets_lost_during_retreat     = np.zeros((self.ndim, self.nyears))
-        self.total_annual_cost_of_retreat   = np.zeros((self.ndim, self.nyears))
+        self.annual_reactive_asset_retreat  = np.zeros((self.nreg, self.nyears))
+        self.annual_proactive_asset_retreat = np.zeros((self.nreg, self.nyears))
+        self.annual_total_asset_retreat     = np.zeros((self.nreg, self.nyears))
+        self.asset_demolition_cost          = np.zeros((self.nreg, self.nyears))
+        self.asset_relocation_cost          = np.zeros((self.nreg, self.nyears))
+        self.assets_lost_during_retreat     = np.zeros((self.nreg, self.nyears))
+        self.total_annual_cost_of_retreat   = np.zeros((self.nreg, self.nyears))
 
         # Loss of area
-        self.inundated_area = np.zeros((self.ndim, self.nyears))
-        self.abandoned_area = np.zeros((self.ndim, self.nyears))
-        self.effective_retreat_height = np.zeros((self.ndim, self.nyears))
+        self.inundated_area = np.zeros((self.nreg, self.nyears))
+        self.abandoned_area = np.zeros((self.nreg, self.nyears))
+        self.effective_retreat_height = np.zeros((self.nreg, self.nyears))
 
         # net flood height
         # This is the net of global SLR and the building of flood protection
-        self.effective_flood_height        = np.zeros((self.ndim, self.nyears))
+        self.effective_flood_height        = np.zeros((self.nreg, self.nyears))
 
-        
+
+        # Variables for quantities that are flooded on average once per year
+        # This is for calculating reactive retreat under no adaptation
+        self.surge1_inundated_area                     = np.zeros((self.nreg, self.nyears))
+        self.surge1_inundated_original_asset_fraction  = np.zeros((self.nreg, self.nyears))
+        self.surge1_inundated_original_people_fraction = np.zeros((self.nreg, self.nyears))
+
+        # GDP productivity feedback diagnostics
+        self.annual_GDP_loss_from_productivity_effect = np.zeros((self.nreg, self.nyears))
         ################################################################################
         #### Initial values and fit parameters for pre-defined model versions ##########
         ################################################################################
         
-        if version in ['DIVA_global', 'DIVA_bipolar', 'DIVA_regional']:
-            # These are predefined aggregation levels that load input parameters from files
-            # Input parameters are general aggregated information from the DIVA dataset 
-            # and the fit parameters used to match DIVA and CIAM data of inundation, surge exposure etc.
-            # -> We include all segments from DIVA, also those with a population of 0, as there will still be a loss of land.
+        # These are predefined aggregation levels that load input parameters from files
+        # Input parameters are general aggregated information from SLIIDERS database 
+        # and fit parameters used to match aggregated infomation for inundation,
+        # susceptibility and surge exposure etc.
 
-            ### Loading the general aggregated information
-            path = input_path+'aggregated_data/'
-            df = pd.read_csv(path+version+'_information.csv', delimiter=',')
-            
-            # The factor multiplied with SLR_total to get regional SLR. Only used in case the individual components are not given
-            # so that regional SLR has to be fitted linearly to total global SLR
-            self.SLR_factor              = df.SLR_factor.values[:]
-            # The weights of the individual SLR components for each region to get regional SLR (in case this is activated).
-            # Not included are thermosteric and LWS SLR, because weights are 1 in BRICK.
-            self.SLR_weight_MG           = df.SLR_weight_MG.values[:]   
-            self.SLR_weight_GIS          = df.SLR_weight_GIS.values[:]  
-            self.SLR_weight_AIS          = df.SLR_weight_AIS.values[:]
-            
-            # Information on the coastal regions (aggregated segment data from DIVA)
-            self.average_fp_height_init  = df.average_fp_height.values[:]
-            self.total_fp_length         = df.total_fp_length.values[:]
-            self.coastal_population_init = df.population_fraction.values[:] * 575.6 # The total population in the segments from DIVA
-            self.coastal_assets_init     = df.asset_fraction.values[:] * 29079.6 # using segment pop, GDPpc and an asset-GDP ratio of 3
-            
+        ### Loading in the fit parameters
+        # 2 cases (parameters with and without initial flood protection), 4 parameters and X regions
+        self.inund_params_area            = np.zeros((2,4,self.nreg))
+        self.inund_params_assets          = np.zeros((2,4,self.nreg))
+        self.inund_params_people          = np.zeros((2,4,self.nreg))
+        self.surge1_inund_params_area     = np.zeros((2,4,self.nreg))
+        self.surge1_inund_params_assets   = np.zeros((2,4,self.nreg))
+        self.surge1_inund_params_people   = np.zeros((2,4,self.nreg))
+        self.storm_suscept_params_assets  = np.zeros((2,4,self.nreg))
+        self.storm_suscept_params_people  = np.zeros((2,4,self.nreg))
+        self.storm_exposure_params_assets = np.zeros((2,4,self.nreg))
+        self.storm_exposure_params_people = np.zeros((2,4,self.nreg))
+        
+        self.variables = [self.inundated_area, self.inundated_original_asset_fraction, self.inundated_original_people_fraction,
+                          self.surge1_inundated_area, self.surge1_inundated_original_asset_fraction, self.surge1_inundated_original_people_fraction,
+                          self.orig_susceptible_asset_fraction, self.orig_susceptible_people_fraction,
+                          self.orig_exposed_asset_fraction, self.orig_exposed_people_fraction]
+        self.parameters = [self.inund_params_area, self.inund_params_assets, self.inund_params_people,
+                           self.surge1_inund_params_area, self.surge1_inund_params_assets, self.surge1_inund_params_people,
+                           self.storm_suscept_params_assets, self.storm_suscept_params_people,
+                           self.storm_exposure_params_assets, self.storm_exposure_params_people]
+        self.limits = [None, 1.0, 1.0, None, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        filenames_extensions = ['inund_params_area', 'inund_params_assets', 'inund_params_people',
+                                'ann_inund_params_area', 'ann_inund_params_assets', 'ann_inund_params_people',
+                                'storm_suscept_params_assets', 'storm_suscept_params_people',
+                                'storm_exposure_params_assets', 'storm_exposure_params_people']
 
-            # 2 cases (parameters with and without initial flood protection), 4 parameters and X regions
-            self.inund_params_area = np.zeros((2,4,len(self.SLR_factor)))
-            self.inund_params_assets = np.zeros((2,4,len(self.SLR_factor)))
-            self.inund_params_people = np.zeros((2,4,len(self.SLR_factor)))
-            self.storm_suscept_params_assets = np.zeros((2,4,len(self.SLR_factor)))
-            self.storm_suscept_params_people = np.zeros((2,4,len(self.SLR_factor)))
-            self.storm_exposure_params_assets = np.zeros((2,4,len(self.SLR_factor)))
-            self.storm_exposure_params_people = np.zeros((2,4,len(self.SLR_factor)))
+        cache_key = (input_path, self.version, self.nreg)
+        cached = SLRImpactModel._STATIC_INPUT_CACHE.get(cache_key)
 
-            # This determines the parameters of the fit to the DIVA dataset. 
-            # In CIAM, the "No adaptation case" apparently assumes that there is no initial seawall
-            # at the start of the integration. If "include_initial_fp=True" then the fit
-            # assumes that the initial seawall has the height given in the DIVA dataset.
-            # --> Fitted only to positive values of effective flood height, becaus negative flood height
-            # (i.e. better protection than in reference case) is not interesting here.
-            
-            parameters = [self.inund_params_area, self.inund_params_assets, self.inund_params_people, self.storm_suscept_params_assets, 
-                          self.storm_suscept_params_people, self.storm_exposure_params_assets, self.storm_exposure_params_people]
-            filenames_extensions = ['inund_params_area', 'inund_params_assets', 'inund_params_people', 'storm_suscept_params_assets',
-                                    'storm_suscept_params_people', 'storm_exposure_params_assets', 'storm_exposure_params_people']
+        if cached is None:
+            info_path = input_path + 'aggregated_data/'
+            df_info = pd.read_csv(info_path + self.version + '_information.csv', delimiter=',')
 
-            path = input_path+'fit_function_parameters/'
-            for iparam, parameter in enumerate(parameters):
+            surge_heights = np.ones((self.nreg, 4))
+            surge_heights[:, 0] = df_info.surge1_height.values[:]
+            surge_heights[:, 1] = df_info.surge10_height.values[:]
+            surge_heights[:, 2] = df_info.surge100_height.values[:]
+            surge_heights[:, 3] = df_info.surge1000_height.values[:]
+
+            fit_parameters = np.zeros((len(filenames_extensions), 2, 4, self.nreg))
+            fit_path = input_path + 'fit_function_parameters/'
+            for iparam in range(len(filenames_extensions)):
                 # Fits including the initial flood protection
                 # Here, the data were fitted using a logistic function: y = A / (1 + exp(-k*(x-x0)))
-                df = pd.read_csv(path+version+'_'+filenames_extensions[iparam]+'.csv', delimiter=',')
-                parameter[0,0,:] = df.k.values[:]
-                parameter[0,1,:] = df.x0.values[:]
-                parameter[0,2,:] = df.A.values[:]
-                parameter[0,3,:] = df.c.values[:]
-                
-                # Fits without initial flood protection
-                # -> only need 3 parameters for the fit, leave 4th at 0
-                # In this case, fitted using a log function: y = max(0, a*ln(b*x+1)) + c
-                df = pd.read_csv(path+version+'_'+filenames_extensions[iparam]+'_no_initial_dikes.csv', delimiter=',')
-                parameter[1,0,:] = df.a.values[:]
-                parameter[1,1,:] = df.b.values[:]
-                parameter[1,2,:] = df.c.values[:]
-        else:
-            sys.exit('Specified model version "'+version+'" not allowed! Available options are "DIVA_global", "DIVA_bipolar", "DIVA_regional".')
+                df = pd.read_csv(fit_path + self.version + '_' + filenames_extensions[iparam] + '.csv', delimiter=',')
+                fit_parameters[iparam, 0, 0, :] = df.k.values[:]
+                fit_parameters[iparam, 0, 1, :] = df.x0.values[:]
+                fit_parameters[iparam, 0, 2, :] = df.A.values[:]
+                fit_parameters[iparam, 0, 3, :] = df.c.values[:]
+
+                # Fits without initial flood protection, same function as above
+                df = pd.read_csv(fit_path + self.version + '_' + filenames_extensions[iparam] + '_no_initial_dikes.csv', delimiter=',')
+                fit_parameters[iparam, 1, 0, :] = df.k.values[:]
+                fit_parameters[iparam, 1, 1, :] = df.x0.values[:]
+                fit_parameters[iparam, 1, 2, :] = df.A.values[:]
+                fit_parameters[iparam, 1, 3, :] = df.c.values[:]
+
+            cached = {
+                'SLR_factor': df_info.SLR_factor.values[:],
+                'SLR_weight_MG': df_info.SLR_weight_MG.values[:],
+                'SLR_weight_GIS': df_info.SLR_weight_GIS.values[:],
+                'SLR_weight_AIS': df_info.SLR_weight_AIS.values[:],
+                'average_fp_height_init': df_info.average_fp_height.values[:],
+                'total_fp_length': df_info.total_fp_length.values[:],
+                'mobile_asset_fraction': df_info.mobcapfrac.values[:, np.newaxis],
+                'surge_heights': surge_heights,
+                'fit_parameters': fit_parameters,
+            }
+            SLRImpactModel._STATIC_INPUT_CACHE[cache_key] = cached
+
+        # The factor multiplied with SLR_total to get regional SLR. Only used in case the individual components are not given
+        # so that regional SLR has to be fitted linearly to total global SLR
+        self.SLR_factor = cached['SLR_factor'].copy()
+        # The weights of the individual SLR components for each region to get regional SLR (in case this is activated).
+        # Not included are thermosteric and LWS SLR, because weights are 1 in BRICK.
+        self.SLR_weight_MG = cached['SLR_weight_MG'].copy()
+        self.SLR_weight_GIS = cached['SLR_weight_GIS'].copy()
+        self.SLR_weight_AIS = cached['SLR_weight_AIS'].copy()
+
+        # Information on the coastal regions
+        self.average_fp_height_init = cached['average_fp_height_init'].copy()
+        self.total_fp_length = cached['total_fp_length'].copy()
+        self.mobile_asset_fraction = cached['mobile_asset_fraction'].copy()
+
+        # Information on coastal surge heights
+        self.surge_heights = cached['surge_heights'].copy()
+
+        fit_parameters = cached['fit_parameters']
+        for iparam, parameter in enumerate(self.parameters):
+            parameter[:, :, :] = fit_parameters[iparam, :, :, :]
 
         ################################################################################
         ################################################################################
         ################################################################################
 
 
-    def fit_function(self, x, params, ifunc):
-        if ifunc==0:
-            k = params[ifunc,0]
-            x0 = params[ifunc,1]
-            A = params[ifunc,2]
-            c = params[ifunc,3]
-            return A/(1.0 + np.exp(-k*(x-x0))) + c
-        elif ifunc==1:
-            a=params[ifunc,0]
-            b=params[ifunc,1]
-            c=params[ifunc,2]
-            return a*np.log(b*x+1)+c
+    def __safe_divide(self, numerator, denominator, default=0.0):
+        out = np.full(numerator.shape, default, dtype=float)
+        np.divide(numerator, denominator, out=out, where=denominator > 0.0)
+        return out
 
-    def inverse_fit_function(self, F, params, ifunc):
-        if ifunc==0:
-            k = params[ifunc,0]
-            x0 = params[ifunc,1]
-            A = params[ifunc,2]
-            c = params[ifunc,3]
-            return (-1.0/k) * np.log(A / (F - c) - 1.0) + x0
-        elif ifunc==1:
-            a=params[ifunc,0]
-            b=params[ifunc,1]
-            c=params[ifunc,2]
-            return (np.exp((F - c) / a) - 1.0) / b
+    def __cobb_douglas_output(self, tfp, capital, labor, alpha):
+        capital = np.maximum(np.asarray(capital, dtype=float), 0.0)
+        labor = np.maximum(np.asarray(labor, dtype=float), 0.0)
+        return tfp * np.power(capital, alpha) * np.power(labor, 1.0 - alpha)
+
+    def fit_function(self, x, params, limit=1.0, ifunc=0):
+        k = params[ifunc,0]
+        x0 = params[ifunc,1]
+        A = params[ifunc,2]
+        c = params[ifunc,3]
+        result = np.maximum(1e-6,A/(1.0 + np.exp(-k*(x-x0))) + c)
+        if limit is not None:
+            result = np.minimum(limit, result)
+        return result
+
+    def __fitted_variable(self, dflood, dh, params, limit=1.0):
+
+        # dh >= 0:
+        # This accounts for the possibility that dikes are raised, but SLR was faster (include_failing_protection=True)
+        # E.g. for inundated asset fractions:
+        # Assume a SLR of 2m, but protection was also increased by dh=1m. Then dflood = SLR - dh = 1m.
+        # The fit_function would simply calculate the inundated asset fraction "f0" for 1m in this case.
+        # However, in reality the value would be higher, because those segments, where the protection is breached would be
+        # inundated by 2m of SLR not 1m. Inundated asset fractions of 2m of SLR are f1 here.
+        # The answer is somewhere in the middle, hence the approximated equation below, which was tested on the segment 
+        # data to produce reasonable estimates of the inundated asset fractions (and the other parameters) in these scenarios.
+
+        # If this is not activated, then dh = 0 and f = f0, so the option is automatically turned off.
+        f0_pos = self.fit_function(dflood, params, limit=limit)
+        f1_pos = self.fit_function(dflood+dh, params, limit=limit)
+
+        # dh < 0:
+        # If the average dike height has been reduced, then we should not use dflood itself to calculate the damages.
+        # Instead we can start by defining the minimum and maximum inundated/susceptible/exposed fractions:
+        # The minimum fraction is that of only using SLR (SLR = dflood + dh), assuming dikes would still be as in the initial state
+        # The maximum fraction is derived from using the same SLR, but assuming that all dikes are gone
+        f0_neg = self.fit_function(dflood+dh, params, limit=limit)
+        f1_neg = self.fit_function(dflood+dh, params, limit=limit, ifunc=1)
+        
+
+        return np.where(dh >= 0, np.where(dflood < 0, f0_pos, f0_pos + (f1_pos-f0_pos) * (f0_pos/(params[0,2,:] + params[0,3,:]))),
+                                 f0_neg + (f1_neg - f0_neg) * (np.abs(dh) / self.average_fp_height[:,0]) )
+
+    def __calc_autonomous_retreat_fraction(self,i, variable):
+        if variable == 'area':
+            lower_bound = self.inundated_area[:,i]
+            upper_bound = self.surge1_inundated_area[:,i]
+        elif variable == 'people':
+            lower_bound = self.inundated_original_people_fraction[:,i]
+            upper_bound = self.surge1_inundated_original_people_fraction[:,i]
+        elif variable == 'assets':
+            lower_bound = self.inundated_original_asset_fraction[:,i]
+            upper_bound = self.surge1_inundated_original_asset_fraction[:,i]
+        else: sys.exit('Calling retreat with wrong variable (must be area, people or assets):', variable)
+        return lower_bound + self.retreat_sensitivity * (upper_bound - lower_bound)
 
 
     def __update_single_param(self, prange, scale_factor):
         return prange[0] + scale_factor * (prange[1] - prange[0])
 
     def __randomize_parameters(self):
-        self.flood_event_fatality_rate = self. __update_single_param(self.flood_event_fatality_rate_range, np.random.rand())
-        self.fraction_of_storm_damages_that_is_repaired = self. __update_single_param(self.fraction_of_storm_damages_that_is_repaired_range, np.random.rand())
-        self.flood_event_damage_fraction = self. __update_single_param(self.flood_event_damage_fraction_range, np.random.rand())
-        self.effective_flood_height_at_which_investment_is_halved = self. __update_single_param(self.effective_flood_height_at_which_investment_is_halved_range, np.random.rand())
-        self.safe_coastal_zone_likelihood_threshold = self. __update_single_param(self.safe_coastal_zone_likelihood_threshold_range, np.random.rand())
-        self.fraction_of_investments_that_must_be_at_the_coast = self. __update_single_param(self.fraction_of_investments_that_must_be_at_the_coast_range, np.random.rand())
-        self.maximum_gdp_fraction_for_fp_investment = self. __update_single_param(self.maximum_gdp_fraction_for_fp_investment_range, np.random.rand())
-        self.fp_construction_duration = self. __update_single_param(self.fp_construction_duration_range, np.random.rand())
-        self.fp_construction_cost_reference = self. __update_single_param(self.fp_construction_cost_reference_range, np.random.rand())
-        self.maintenance_cost_fraction = self. __update_single_param(self.maintenance_cost_fraction_range, np.random.rand())
-        self.coastal_land_value_init = self. __update_single_param(self.coastal_land_value_init_range, np.random.rand())
-        self.land_opportunity_cost_rate = self. __update_single_param(self.land_opportunity_cost_rate_range, np.random.rand())
-        self.mobile_asset_fraction = self. __update_single_param(self.mobile_asset_fraction_range, np.random.rand())
-        self.asset_relocation_cost_factor = self. __update_single_param(self.asset_relocation_cost_factor_range, np.random.rand())
-        self.asset_demolition_cost_factor = self. __update_single_param(self.asset_demolition_cost_factor_range, np.random.rand())
+        self.flood_event_fatality_rate                             = self. __update_single_param(self.flood_event_fatality_rate_range, np.random.rand())
+        self.fraction_of_storm_damages_that_is_repaired            = self. __update_single_param(self.fraction_of_storm_damages_that_is_repaired_range, np.random.rand())
+        self.flood_event_damage_fraction                           = self. __update_single_param(self.flood_event_damage_fraction_range, np.random.rand())
+        self.coastal_asset_depreciation_time_scale                 = self. __update_single_param(self.coastal_asset_depreciation_time_scale_range, np.random.rand())
+        self.effective_flood_height_at_which_investment_is_halved  = self. __update_single_param(self.effective_flood_height_at_which_investment_is_halved_range, np.random.rand())
+        self.safe_coastal_zone_likelihood_threshold                = self. __update_single_param(self.safe_coastal_zone_likelihood_threshold_range, np.random.rand())
+        self.fraction_of_investments_that_must_be_at_the_coast     = self. __update_single_param(self.fraction_of_investments_that_must_be_at_the_coast_range, np.random.rand())
+        self.maximum_gdp_fraction_for_fp_investment                = self. __update_single_param(self.maximum_gdp_fraction_for_fp_investment_range, np.random.rand())
+        self.fp_construction_duration                              = self. __update_single_param(self.fp_construction_duration_range, np.random.rand())
+        self.fp_construction_cost_reference_USD2010                = self. __update_single_param(self.fp_construction_cost_reference_USD2010_range, np.random.rand())
+        self.maintenance_cost_fraction                             = self. __update_single_param(self.maintenance_cost_fraction_range, np.random.rand())
+        self.coastal_land_value_init_USD2010                       = self. __update_single_param(self.coastal_land_value_init_USD2010_range, np.random.rand())
+        self.land_opportunity_cost_rate                            = self. __update_single_param(self.land_opportunity_cost_rate_range, np.random.rand())
+        self.asset_relocation_cost_factor                          = self. __update_single_param(self.asset_relocation_cost_factor_range, np.random.rand())
+        self.asset_demolition_cost_factor                          = self. __update_single_param(self.asset_demolition_cost_factor_range, np.random.rand())
         self.not_depreciated_fraction_of_assets_at_time_of_retreat = self. __update_single_param(self.not_depreciated_fraction_of_assets_at_time_of_retreat_range, np.random.rand())
-        self.increase_factor_for_costs_of_reactive_retreat = self. __update_single_param(self.increase_factor_for_costs_of_reactive_retreat_range, np.random.rand())
-        self.proactive_retreat_time_scale = self. __update_single_param(self.proactive_retreat_time_scale_range, np.random.rand())
+        self.people_retreat_cost_factor                            = self. __update_single_param(self.people_retreat_cost_factor_range, np.random.rand())
+        self.proactive_retreat_time_scale                          = self. __update_single_param(self.proactive_retreat_time_scale_range, np.random.rand())
+        self.susceptibility_reduction_exponent                     = self. __update_single_param(self.susceptibility_reduction_exponent_range, np.random.rand())
+        self.gdp_asset_elasticity                                  = self. __update_single_param(self.gdp_asset_elasticity_range, np.random.rand())
+        self.relative_worker_productivity_if_flooded               = self. __update_single_param(self.relative_worker_productivity_if_flooded_range, np.random.rand())
+        self.relative_asset_productivity_if_exposed                = self. __update_single_param(self.relative_asset_productivity_if_exposed_range, np.random.rand())
+        self.eta_productivity_to_investment                        = self. __update_single_param(self.eta_productivity_to_investment_range, np.random.rand())
+        self.maximum_fp_deterioration_rate                         = self. __update_single_param(self.maximum_fp_deterioration_rate_range, np.random.rand())
+        self.retreat_sensitivity                                   = self. __update_single_param(self.retreat_sensitivity_range, np.random.rand())
         return
 
     def getUncertaintyParameters(self):
@@ -387,44 +543,57 @@ class SLRImpactModel:
                 np.copy(self.flood_event_fatality_rate),
                 np.copy(self.fraction_of_storm_damages_that_is_repaired),
                 np.copy(self.flood_event_damage_fraction),
+                np.copy(self.coastal_asset_depreciation_time_scale),
                 np.copy(self.effective_flood_height_at_which_investment_is_halved),
                 np.copy(self.safe_coastal_zone_likelihood_threshold),
                 np.copy(self.fraction_of_investments_that_must_be_at_the_coast),
                 np.copy(self.maximum_gdp_fraction_for_fp_investment),
                 np.copy(self.fp_construction_duration),
-                np.copy(self.fp_construction_cost_reference),
+                np.copy(self.fp_construction_cost_reference_USD2010),
                 np.copy(self.maintenance_cost_fraction),
-                np.copy(self.coastal_land_value_init),
+                np.copy(self.coastal_land_value_init_USD2010),
                 np.copy(self.land_opportunity_cost_rate),
-                np.copy(self.mobile_asset_fraction),
                 np.copy(self.asset_relocation_cost_factor),
                 np.copy(self.asset_demolition_cost_factor),
                 np.copy(self.not_depreciated_fraction_of_assets_at_time_of_retreat),
-                np.copy(self.increase_factor_for_costs_of_reactive_retreat),
-                np.copy(self.proactive_retreat_time_scale)
+                np.copy(self.people_retreat_cost_factor),
+                np.copy(self.proactive_retreat_time_scale),
+                np.copy(self.susceptibility_reduction_exponent),
+                np.copy(self.gdp_asset_elasticity),
+                np.copy(self.relative_worker_productivity_if_flooded),
+                np.copy(self.relative_asset_productivity_if_exposed),
+                np.copy(self.eta_productivity_to_investment),
+                np.copy(self.maximum_fp_deterioration_rate),
+                np.copy(self.retreat_sensitivity),
             ]
         return uncertaintyParameters
 
     def setUncertaintyParameters(self, InputParameters):
-
         self.flood_event_fatality_rate                              = InputParameters[0]
         self.fraction_of_storm_damages_that_is_repaired             = InputParameters[1]
         self.flood_event_damage_fraction                            = InputParameters[2]
-        self.effective_flood_height_at_which_investment_is_halved   = InputParameters[3]
-        self.safe_coastal_zone_likelihood_threshold                 = InputParameters[4]
-        self.fraction_of_investments_that_must_be_at_the_coast      = InputParameters[5]
-        self.maximum_gdp_fraction_for_fp_investment                 = InputParameters[6]
-        self.fp_construction_duration                               = InputParameters[7]
-        self.fp_construction_cost_reference                         = InputParameters[8]
-        self.maintenance_cost_fraction                              = InputParameters[9]
-        self.coastal_land_value_init                                = InputParameters[10]
-        self.land_opportunity_cost_rate                             = InputParameters[11]
-        self.mobile_asset_fraction                                  = InputParameters[12]
+        self.coastal_asset_depreciation_time_scale                  = InputParameters[3]
+        self.effective_flood_height_at_which_investment_is_halved   = InputParameters[4]
+        self.safe_coastal_zone_likelihood_threshold                 = InputParameters[5]
+        self.fraction_of_investments_that_must_be_at_the_coast      = InputParameters[6]
+        self.maximum_gdp_fraction_for_fp_investment                 = InputParameters[7]
+        self.fp_construction_duration                               = InputParameters[8]
+        self.fp_construction_cost_reference_USD2010                 = InputParameters[9]
+        self.maintenance_cost_fraction                              = InputParameters[10]
+        self.coastal_land_value_init_USD2010                        = InputParameters[11]
+        self.land_opportunity_cost_rate                             = InputParameters[12]
         self.asset_relocation_cost_factor                           = InputParameters[13]
         self.asset_demolition_cost_factor                           = InputParameters[14]
         self.not_depreciated_fraction_of_assets_at_time_of_retreat  = InputParameters[15]
-        self.increase_factor_for_costs_of_reactive_retreat          = InputParameters[16]
+        self.people_retreat_cost_factor                             = InputParameters[16]
         self.proactive_retreat_time_scale                           = InputParameters[17]
+        self.susceptibility_reduction_exponent                      = InputParameters[18]
+        self.gdp_asset_elasticity                                   = InputParameters[19]
+        self.relative_worker_productivity_if_flooded                = InputParameters[20]
+        self.relative_asset_productivity_if_exposed                 = InputParameters[21]
+        self.eta_productivity_to_investment                         = InputParameters[22]
+        self.maximum_fp_deterioration_rate                          = InputParameters[23]
+        self.retreat_sensitivity                                    = InputParameters[24]
 
         return
 
@@ -440,8 +609,8 @@ class SLRImpactModel:
 
         ### The (regional/segregated/global but wheighted) SLR is different from the calculated total SLR!
         if self.include_SLR_components:
-            self.SLR_thermo = self.SLR_components[0,np.newaxis,:] * np.ones(self.ndim)[:,np.newaxis]
-            self.SLR_LWS    = self.SLR_components[1,np.newaxis,:] * np.ones(self.ndim)[:,np.newaxis]
+            self.SLR_thermo = self.SLR_components[0,np.newaxis,:] * np.ones(self.nreg)[:,np.newaxis]
+            self.SLR_LWS    = self.SLR_components[1,np.newaxis,:] * np.ones(self.nreg)[:,np.newaxis]
             self.SLR_MG     = self.SLR_components[2,np.newaxis,:] * self.SLR_weight_MG[:,np.newaxis]
             self.SLR_GIS    = self.SLR_components[3,np.newaxis,:] * self.SLR_weight_GIS[:,np.newaxis]
             self.SLR_AIS    = self.SLR_components[4,np.newaxis,:] * self.SLR_weight_AIS[:,np.newaxis]
@@ -457,56 +626,40 @@ class SLRImpactModel:
                                              + self.CO2emis[np.newaxis,:] * self.expSLR_sens_CO2emis) * self.SLR_factor[:,np.newaxis]
 
         # Convert dollar variables to USD of a specific year (default: USD 2010)
-        self.ypc_US_2010 *= self.USD_fac
-        self.coastal_assets_init *= self.USD_fac
-        self.coastal_land_value_init *= self.USD_fac
-        self.fp_construction_cost_reference *= self.USD_fac
+        self.ypc_US_2010 = self.ypc_US_2010_USD2010 * self.USD_fac
+        self.coastal_land_value_init = self.coastal_land_value_init_USD2010 * self.USD_fac
+        self.fp_construction_cost_reference = self.fp_construction_cost_reference_USD2010 * self.USD_fac
 
         # Copy the input references arrays into the variables that we track
         self.coastal_population = np.copy(self.population)
-        self.coastal_GDP = np.copy(self.GDP)
-        self.coastal_GDPperCapita = self.GDP / self.population
+        self.coastal_assets = np.copy(self.assets) * self.USD_fac
+        self.coastal_GDP = np.copy(self.GDP) * self.USD_fac
+        self.coastal_GDPperCapita = self.__safe_divide(self.coastal_GDP, self.coastal_population)
 
         # Calculating flood damage resilience as in CIAM, depending on GDP per capita
         self.storm_damage_resilience[:,0] = self.coastal_GDPperCapita[:,0] / (self.coastal_GDPperCapita[:,0] + self.ypc_US_2010)
 
         # Initialise main stocks
-        if self.include_initial_fp:
-            self.average_fp_height[:,0]  = self.average_fp_height_init[:]
-        else:
-            self.average_fp_height[:,0]  = 0.0
-        self.coastal_assets[:,0]     = self.coastal_assets_init[:]
-        self.coastal_population[:,0] = self.coastal_population_init[:]
-
+        self.average_fp_height[:,0]  = self.average_fp_height_init[:]
+        
 
         # Now calculate the initial fractions of assets and people that are exposed to storm surges generally, as well as the
         # initial values for the inundated asset, people and area fractions. The latter should theoretically be 0 with the original data,
         # but the fitted function produces very small values for a SLR of 0 meters. 
         # Also, if SLR is not 0 in the initial year, then this will also be > 0.
     
-        # Calculation uses different fit functions, depending on the above question (logistic and logarithmic functions)
-        self.orig_susceptible_asset_fraction[:,0]  = self.fit_function(self.effective_flood_height[:,0], self.storm_suscept_params_assets, self.iFit)
-        self.orig_susceptible_people_fraction[:,0] = self.fit_function(self.effective_flood_height[:,0], self.storm_suscept_params_people, self.iFit)
-        self.orig_exposed_asset_fraction[:,0]      = self.fit_function(self.effective_flood_height[:,0], self.storm_exposure_params_assets, self.iFit)
-        self.orig_exposed_people_fraction[:,0]     = self.fit_function(self.effective_flood_height[:,0], self.storm_exposure_params_people, self.iFit)
-
-        self.inundated_original_asset_fraction[:,0]  = self.fit_function(self.effective_flood_height[:,0], self.inund_params_assets, self.iFit)
-        self.inundated_original_people_fraction[:,0] = self.fit_function(self.effective_flood_height[:,0], self.inund_params_people, self.iFit)
-        self.inundated_area[:,0]                     = self.fit_function(self.effective_flood_height[:,0], self.inund_params_area, self.iFit)
-
-        self.retreated_original_asset_fraction[:,0]  = self.fit_function(self.effective_flood_height[:,0], self.inund_params_assets, self.iFit)
-        self.retreated_original_people_fraction[:,0] = self.fit_function(self.effective_flood_height[:,0], self.inund_params_people, self.iFit)
-
+        for iparam, params in enumerate(self.parameters):
+            self.variables[iparam][:,0] = self.__fitted_variable(self.effective_flood_height[:,0], 0, params, limit=self.limits[iparam])
 
         # Check if given willingness_to_invest variable is time dependent variable with correct length or a scalar
         if not isinstance(self.willingness_to_invest_in_fp, (list, np.ndarray)):
-            self.willingness_to_invest_in_fp = np.zeros((self.ndim, self.nyears))+self.willingness_to_invest_in_fp
-        elif len(self.willingness_to_invest_in_fp[0,:]) != self.nyears or  len(self.willingness_to_invest_in_fp[:,0]) != self.ndim:
+            self.willingness_to_invest_in_fp = np.zeros((self.nreg, self.nyears))+self.willingness_to_invest_in_fp
+        elif len(self.willingness_to_invest_in_fp[0,:]) != self.nyears or  len(self.willingness_to_invest_in_fp[:,0]) != self.nreg:
             sys.exit('Length of willingness to invest array does not fit with time or aggregation dimension')
         # Check if given willingness_to_retreat variable is time dependent variable with correct length or a scalar
         if not isinstance(self.willingness_to_retreat, (list, np.ndarray)):
-            self.willingness_to_retreat = np.zeros((self.ndim, self.nyears))+self.willingness_to_retreat
-        elif len(self.willingness_to_retreat[0,:]) != self.nyears or  len(self.willingness_to_retreat[:,0]) != self.ndim:
+            self.willingness_to_retreat = np.zeros((self.nreg, self.nyears))+self.willingness_to_retreat
+        elif len(self.willingness_to_retreat[0,:]) != self.nyears or  len(self.willingness_to_retreat[:,0]) != self.nreg:
             sys.exit('Length of willingness to retreat array does not fit with time or aggregation dimension')
 
 
@@ -547,39 +700,55 @@ class SLRImpactModel:
         ### MAINTENANCE COSTS
         self.annual_costs_of_fp_maintenance[:,i] = self.average_fp_height[:,i] * self.total_fp_length \
                                                    * self.construction_cost[:,i] *  self.maintenance_cost_fraction
-        self.annual_costs_of_fp_maintenance_noadapt[:,i] = self.average_fp_height[:,0] * self.total_fp_length \
+        ref_maintenance_costs = self.average_fp_height[:,0] * self.total_fp_length \
                                                    * self.construction_cost[:,i] *  self.maintenance_cost_fraction
+        
+        self.annual_SLR_costs_of_fp_maintenance[:,i] = np.maximum(0, self.annual_costs_of_fp_maintenance[:,i] - ref_maintenance_costs)
 
-
-
-        ### HOW MUCH INVESTMENT?
+        ### FLOOD PROTECTION INVESTMENT
         # Current net flood height + expected SLR is missing protection
-        missing_protection = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i]
+        if self.include_foresight_in_adaptation: missing_protection = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i]
+        else: missing_protection = self.effective_flood_height[:,i]
         desired_protection = missing_protection * self.willingness_to_invest_in_fp[:,i]
 
         cost_of_reaching_desired_protection = np.maximum(0, self.construction_cost[:,i] * self.total_fp_length * \
                     (( desired_protection + self.average_fp_height[:,i])**2 - self.average_fp_height[:,i]**2) )
     
-        maximum_money_available_for_fp = np.maximum(0, self.coastal_GDP[:,i] * self.maximum_gdp_fraction_for_fp_investment \
-                                            - self.annual_costs_of_fp_maintenance[:,i] )
+        maintenance_cost = self.annual_costs_of_fp_maintenance[:,i]
+        money_available_for_fp = np.maximum(0, self.coastal_GDP[:,i] * self.maximum_gdp_fraction_for_fp_investment \
+                                            - maintenance_cost)
 
             
         if self.include_fp_investment_cap:
             self.effective_annual_investment_in_fp[:,i] = np.minimum(cost_of_reaching_desired_protection / self.fp_construction_duration,
-                                                                       maximum_money_available_for_fp)
+                                                                       money_available_for_fp)
+            self.mask_annual_fp_investment_limited[:,i] = np.where(cost_of_reaching_desired_protection / self.fp_construction_duration > money_available_for_fp, 1.0, 0.0)
         else:
             self.effective_annual_investment_in_fp[:,i] = cost_of_reaching_desired_protection / self.fp_construction_duration
 
         # Calculate potential maximum fp height increase for asset investment decision making
-        potential_max_investment_over_50_years = self.effective_annual_investment_in_fp[:,i] * 50.0
+        # Use current maximum spending and the expected willingness to invest in fp, based on previous willingness in the past
+        istart = np.maximum(0,i-int(self.proactive_retreat_time_scale))
+        expected_willingness_to_invest_in_fp = np.mean(self.willingness_to_invest_in_fp[:,istart:i+1], axis=1)
+        potential_investment_over_50_years = money_available_for_fp * expected_willingness_to_invest_in_fp * self.expSLR_timeHorizon
         self.potential_fp_height_increase_over_50_years[:,i] =  np.sqrt( self.average_fp_height[:,i]**2 \
-                        + potential_max_investment_over_50_years / (self.total_fp_length * self.construction_cost[:,i]) ) - self.average_fp_height[:,i]
+                        + potential_investment_over_50_years / (self.total_fp_length * self.construction_cost[:,i]) ) - self.average_fp_height[:,i]
 
 
 
-        ### CHANGE IN FLOOD PROTECTION HEIGHT
-        self.annual_change_in_fp_height[:,i] = np.sqrt( self.average_fp_height[:,i]**2 + self.effective_annual_investment_in_fp[:,i] \
+        # change in fp height from investment
+        self.annual_increase_in_fp_height_from_investment[:,i] = np.sqrt( self.average_fp_height[:,i]**2 + self.effective_annual_investment_in_fp[:,i] \
                     / (self.total_fp_length * self.construction_cost[:,i]) ) - self.average_fp_height[:,i]
+
+
+        ### FLOOD PROTECTION DECLINE
+        if self.include_failing_protection:
+            # decline in average fp height, if it is below the 1-year return period surge height
+            surge1_height = self.surge_heights[:,0] + (self.SLR[:,i] - self.SLR[:,0])
+            # maximum deterioration rate if surge1 is more than 1 m higher than seawall, linear increase inbetween 
+            annual_deterioration = self.maximum_fp_deterioration_rate * np.minimum(1.0, np.maximum(0.0, surge1_height - self.average_fp_height[:,i]))
+            self.annual_reduction_in_fp_height_from_deterioration[:,i] = np.minimum(self.average_fp_height[:,i], annual_deterioration)
+                                                                                   
 
         if i >= self.nyears-1: return
         ##########################################################################################
@@ -587,7 +756,8 @@ class SLRImpactModel:
         ### UPDATE THE FLOOD PROTECTION HEIGHT
         ###
         ##########################################################################################
-        self.average_fp_height[:,i+1] = self.average_fp_height[:,i] + self.annual_change_in_fp_height[:,i]            
+        self.average_fp_height[:,i+1] = self.average_fp_height[:,i] + self.annual_increase_in_fp_height_from_investment[:,i] \
+                                                                    - self.annual_reduction_in_fp_height_from_deterioration[:,i]
         
         return
 
@@ -603,36 +773,70 @@ class SLRImpactModel:
             ##########################################################################################
 
             # There are two ways how people retreat from the coast:
-            #  1. Reactive retreat in response to inundation, which has very high costs.
-            #  2. Proactive retreat in response to expected inundation in 50 years, which has much lower costs.
+            #  1. Reactive retreat in response to flooding.
+            #  2. Proactive retreat in response to expected exposure and flooding.
         
-            # Reactive retreat (and hence flood damage) only after first timestep, because it is in response to SLR from one time step to the next
+            #### Reactive retreat ###################################################################
+            # only after first timestep, because it is in response to SLR from one time step to the next
             if i==0: 
                 self.annual_reactive_people_retreat[:,i] = 0.0
-                total_removed_fraction = self.inundated_original_people_fraction[:,0] # use the initialisation value in first timestep         
+                total_removed_fraction = self.__calc_autonomous_retreat_fraction(0,'people')
             else:
                 # First calculate the previous fraction of original people distribution that was already removed (inundated or retreated)
-                total_removed_fraction = np.maximum(self.inundated_original_people_fraction[:,i-1], self.retreated_original_people_fraction[:,i-1])
+                total_removed_fraction = np.maximum(self.__calc_autonomous_retreat_fraction(i-1,'people'), self.retreated_original_people_fraction[:,i-1])
+                total_removed_fraction = np.clip(total_removed_fraction, 0.0, 1.0 - 1e-12)
                 self.annual_reactive_people_retreat[:,i] = self.coastal_population[:,i] \
-                                                            * np.maximum(0.0, (self.inundated_original_people_fraction[:,i]\
+                                                            * np.maximum(0.0, (self.__calc_autonomous_retreat_fraction(i,'people')\
                                                               - total_removed_fraction) / (1.0 - total_removed_fraction) )
                 # update removed fraction for calculation of proactive retreat
-                total_removed_fraction = np.maximum(self.inundated_original_people_fraction[:,i], self.retreated_original_people_fraction[:,i-1])
+                total_removed_fraction = np.maximum(self.__calc_autonomous_retreat_fraction(i,'people'), self.retreated_original_people_fraction[:,i-1])
+                total_removed_fraction = np.clip(total_removed_fraction, 0.0, 1.0 - 1e-12)
 
 
-            # what is the flood height in 50 years?
-            expected_effective_flood_height = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i] \
-                                            - self.potential_fp_height_increase_over_50_years[:,i]
+            #### Proactive retreat #####################################################################
+            # If this strategy is chosen, this will lead to additional retreat based on two quantities:
+            #  1. If annual exposure will be higher than in the start year, this drives retreat.
+            #  2. If people will become inundated, this will drive their retreat.
+            #  -> In contrast to protection, which uses expected SLR in 50 years for estimating required investment,
+            #     we use a shorter time horizon for retreat (the proactive_retreat_time_scale). We
+            #     interpolate linearly between the current and the expected SLR and fp height in 50 years.
+            if self.include_foresight_in_adaptation:
+                # what is the flood height in the future?
+                expected_effective_flood_height = self.effective_flood_height[:,i] + (self.expected_SLR_in_50_years[:,i] \
+                                                - self.potential_fp_height_increase_over_50_years[:,i]) \
+                                                * (self.proactive_retreat_time_scale / self.expSLR_timeHorizon)
+            else:
+                expected_effective_flood_height = self.effective_flood_height[:,i]
 
-            expected_susceptible_fraction = self.fit_function(expected_effective_flood_height, self.storm_suscept_params_people, self.iFit)
+            # including the possibility that raised dikes are breached
+            if self.include_failing_protection: 
+                dh = self.average_fp_height[:,i] + self.potential_fp_height_increase_over_50_years[:,i] - self.average_fp_height[:,0]
+            else: 
+                dh = 0.0
 
-            retreating_people_fraction = (self.willingness_to_retreat[:,i] / self.proactive_retreat_time_scale) \
-                    *  np.maximum(0, expected_susceptible_fraction - total_removed_fraction)
+            # Approximate uncertainty around proactive retreat as being bounded by expected annually exposed and expected susceptible fraction
+            lower_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.surge1_inund_params_people)
+            upper_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.storm_suscept_params_people)
+            retreating_orig_people_fraction = lower_bound + self.retreat_sensitivity * (upper_bound - lower_bound)
+
+            retreating_people_fraction = self.willingness_to_retreat[:,i]  *  np.maximum(0, retreating_orig_people_fraction - total_removed_fraction)
+            
+            # Safeguard against retreating too many people
+            retreating_people_fraction = np.minimum(retreating_people_fraction, 1.0 - total_removed_fraction)
+
+
+            # Here also approximate the abandoned land to estimate opportunity costs later on
+            lower_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.inund_params_area, limit=None)
+            upper_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.surge1_inund_params_area, limit=None)
+            expected_inundated_land = lower_bound + self.retreat_sensitivity * (upper_bound - lower_bound)
+            current_inundated_land = self.__calc_autonomous_retreat_fraction(i,'area')
+            self.abandoned_area[:,i] = current_inundated_land + self.willingness_to_retreat[:,i] * (expected_inundated_land - current_inundated_land)
 
             if i==0: self.retreated_original_people_fraction[:,i] = self.retreated_original_people_fraction[:,0] + retreating_people_fraction
             else: self.retreated_original_people_fraction[:,i] = self.retreated_original_people_fraction[:,i-1] + retreating_people_fraction
     
-            self.annual_proactive_people_retreat[:,i] = self.coastal_population[:,i] * retreating_people_fraction / (1.0 - total_removed_fraction)
+            self.annual_proactive_people_retreat[:,i] = (self.coastal_population[:,i] - self.annual_reactive_people_retreat[:,i]) \
+                                                         * retreating_people_fraction / (1.0 - total_removed_fraction)
     
             # Total asset retreat is sum of reactive and proactive retreat
             self.annual_total_people_retreat[:,i] = self.annual_reactive_people_retreat[:,i] +  self.annual_proactive_people_retreat[:,i]
@@ -642,22 +846,20 @@ class SLRImpactModel:
             #### Number of people flooded in storms and flood fatalities
             ####
             ########################################################################################## 
-
-            # Storm damage to people is depending on what is the actually susceptible fraction of people. 
-            # This has to account for the fraction of people that is generally susceptible and the fraction
-            # of people that has already been removed from the coast (via inundation or retreat)
-            total_removed_fraction = np.maximum(self.inundated_original_people_fraction[:,i], self.retreated_original_people_fraction[:,i])
+            # Update the susceptible fraction again
+            total_removed_fraction = np.maximum(self.__calc_autonomous_retreat_fraction(i,'people'), self.retreated_original_people_fraction[:,i])
+            total_removed_fraction = np.clip(total_removed_fraction, 0.0, 1.0 - 1e-12)
             actually_susceptible_people_fraction = np.maximum(0, (self.orig_susceptible_people_fraction[:,i] - total_removed_fraction) \
                                                      / (1.0 - total_removed_fraction))
 
             if self.include_retreat_exposure_reduction:
-                people_exposure_reduction_because_of_retreat = actually_susceptible_people_fraction/self.orig_susceptible_people_fraction[:,i]
-            else:
-                people_exposure_reduction_because_of_retreat = 1.0
+                exposure_reduction = np.where(self.orig_susceptible_people_fraction[:,i] == 0, 0, 
+                        (actually_susceptible_people_fraction/self.orig_susceptible_people_fraction[:,i])**self.susceptibility_reduction_exponent)
+            else: exposure_reduction = 1.0       
 
             # Subtract here the initial exposure fraction from current exposure fraction to get the SLR driven number
-            self.annual_people_flooded[:,i] = self.coastal_population[:,i] * people_exposure_reduction_because_of_retreat \
-                                              * np.maximum(0.0, self.orig_exposed_people_fraction[:,i] - self.orig_exposed_people_fraction[:,0])
+            self.annual_people_flooded[:,i] = (self.coastal_population[:,i] - self.annual_total_people_retreat[:,i]) * np.maximum(0.0, 
+                    self.orig_exposed_people_fraction[:,i] * exposure_reduction - self.orig_exposed_people_fraction[:,0])
 
             self.annual_flood_fatalities[:,i] = self.flood_event_fatality_rate * (1.0 - self.storm_damage_resilience[:,i]) \
                     * self.annual_people_flooded[:,i]
@@ -689,45 +891,71 @@ class SLRImpactModel:
             ###
             ##########################################################################################
 
-            # There are two ways how asset retreat from the coast:
-            #  1. Reactive retreat in response to inundation, which has very high costs.
-            #  2. Proactive retreat in response to expected inundation in 50 years, which has much lower costs.
+            # There are two ways how assets retreat from the coast:
+            #  1. Reactive retreat in response to flooding.
+            #  2. Proactive retreat in response to expected exposure and flooding.
 
-            # Reactive retreat (and hence flood damage) only after first timestep, because it is in response to SLR from one time step to the next
+            #### Reactive retreat ####################################################################
+            # only after first timestep, because it is in response to SLR from one time step to the next
             if i==0: 
                 self.annual_reactive_asset_retreat[:,i] = 0.0
-                total_removed_fraction = self.inundated_original_asset_fraction[:,0] # use the initialisation value in first timestep
+                total_removed_fraction = self.__calc_autonomous_retreat_fraction(0,'assets')
             else:
                 # First calculate the previous fraction of original asset distribution that was already removed (inundated or retreated)
-                total_removed_fraction = np.maximum(self.inundated_original_asset_fraction[:,i-1], self.retreated_original_asset_fraction[:,i-1])
-                self.annual_reactive_asset_retreat[:,i] = self.coastal_assets[:,i] * np.maximum(0.0, (self.inundated_original_asset_fraction[:,i]\
-                                                                    - total_removed_fraction) / (1.0 - total_removed_fraction) )
+                total_removed_fraction = np.maximum(self.__calc_autonomous_retreat_fraction(i-1,'assets'), self.retreated_original_asset_fraction[:,i-1])
+                total_removed_fraction = np.clip(total_removed_fraction, 0.0, 1.0 - 1e-12)
+                self.annual_reactive_asset_retreat[:,i] = self.coastal_assets[:,i] \
+                                                            * np.maximum(0.0, (self.__calc_autonomous_retreat_fraction(i,'assets')\
+                                                              - total_removed_fraction) / (1.0 - total_removed_fraction) )
                 # update removed fraction for calculation of proactive retreat
-                total_removed_fraction = np.maximum(self.inundated_original_asset_fraction[:,i], self.retreated_original_asset_fraction[:,i-1])
+                total_removed_fraction = np.maximum(self.__calc_autonomous_retreat_fraction(i,'assets'), self.retreated_original_asset_fraction[:,i-1])
+                total_removed_fraction = np.clip(total_removed_fraction, 0.0, 1.0 - 1e-12)
 
+            
+            if self.dbg==1: print('        reactive asset retreat done')
 
-            # what is the flood height in 50 years?
-            expected_effective_flood_height = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i] \
-                                            - self.potential_fp_height_increase_over_50_years[:,i]
+            #### Proactive retreat #####################################################################
+            # If this strategy is chosen, this will lead to additional retreat based on two quantities:
+            #  1. If annual exposure will be higher than in the start year, this drives retreat.
+            #  2. If people will become inundated, this will drive their retreat.
+            #  -> In contrast to protection, which uses expected SLR in 50 years for estimating required investment,
+            #     we use a shorter time horizon for retreat (the proactive_retreat_time_scale). We
+            #     interpolate linearly between the current and the expected SLR and fp height in 50 years.
+            if self.include_foresight_in_adaptation:
+                # what is the flood height in the future?
+                expected_effective_flood_height = self.effective_flood_height[:,i] + (self.expected_SLR_in_50_years[:,i] \
+                                                - self.potential_fp_height_increase_over_50_years[:,i]) \
+                                                * (self.proactive_retreat_time_scale / self.expSLR_timeHorizon)
+            else:
+                expected_effective_flood_height = self.effective_flood_height[:,i]
 
-            expected_susceptible_fraction = self.fit_function(expected_effective_flood_height, self.storm_suscept_params_assets, self.iFit)
+            # including the possibility that raised dikes are breached
+            if self.include_failing_protection: 
+                dh = self.average_fp_height[:,i] + self.potential_fp_height_increase_over_50_years[:,i] - self.average_fp_height[:,0]
+            else: 
+                dh = 0.0
 
-            retreating_asset_fraction = (self.willingness_to_retreat[:,i] / self.proactive_retreat_time_scale) \
-                    * np.maximum(0, expected_susceptible_fraction - total_removed_fraction)
-                                            
+            # Approximate uncertainty around proactive retreat as being bounded by expected annually exposed and expected susceptible fraction
+            lower_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.surge1_inund_params_assets)
+            upper_bound = self.__fitted_variable(expected_effective_flood_height, dh, self.storm_suscept_params_assets)
+            retreating_orig_asset_fraction = lower_bound + self.retreat_sensitivity * (upper_bound - lower_bound)
 
+            retreating_asset_fraction = self.willingness_to_retreat[:,i]  *  np.maximum(0, retreating_orig_asset_fraction - total_removed_fraction)
+            
+            # Safeguard against retreating too many assets
+            retreating_asset_fraction = np.minimum(retreating_asset_fraction, 1.0 - total_removed_fraction)
 
             if i==0: self.retreated_original_asset_fraction[:,i] = self.retreated_original_asset_fraction[:,0] + retreating_asset_fraction
             else: self.retreated_original_asset_fraction[:,i] = self.retreated_original_asset_fraction[:,i-1] + retreating_asset_fraction
     
-            self.annual_proactive_asset_retreat[:,i] = self.coastal_assets[:,i] * retreating_asset_fraction / (1.0 - total_removed_fraction)
+            self.annual_proactive_asset_retreat[:,i] = (self.coastal_assets[:,i] - self.annual_reactive_asset_retreat[:,i]) * retreating_asset_fraction / (1.0 - total_removed_fraction)
     
             # Total asset retreat is sum of reactive and proactive retreat
-            self.annual_total_asset_retreat[:,i] = self.annual_reactive_asset_retreat[:,i] +  self.annual_proactive_asset_retreat[:,i]
+            self.annual_total_asset_retreat[:,i] = self.annual_reactive_asset_retreat[:,i] + self.annual_proactive_asset_retreat[:,i]
 
+            if self.dbg==1: print('        proactive retreat done')
 
-
-           ##########################################################################################
+            ##########################################################################################
             ###
             ### STORM DAMAGE to assets
             ###
@@ -736,37 +964,53 @@ class SLRImpactModel:
             # Storm damage to assets is depending on what is the actually susceptible fraction of assets. This has to account for the fraction of
             # assets that is generally susceptible and the fraction of assets that has already been removed from the coast
             # (via inundation or retreat)
-            total_removed_fraction = np.maximum(self.inundated_original_asset_fraction[:,i], self.retreated_original_asset_fraction[:,i])
+            total_removed_fraction = np.maximum(self.__calc_autonomous_retreat_fraction(i,'assets'), self.retreated_original_asset_fraction[:,i])
+            total_removed_fraction = np.clip(total_removed_fraction, 0.0, 1.0 - 1e-12)
             actually_susceptible_asset_fraction = np.maximum(0, (self.orig_susceptible_asset_fraction[:,i] - total_removed_fraction)\
                                                                   / (1.0 - total_removed_fraction))
             if self.include_retreat_exposure_reduction:
-                asset_exposure_reduction_because_of_retreat = actually_susceptible_asset_fraction/self.orig_susceptible_asset_fraction[:,i]
-            else:
-                asset_exposure_reduction_because_of_retreat = 1.0
+                exposure_reduction = np.where(self.orig_susceptible_asset_fraction[:,i] == 0, 0, 
+                        (actually_susceptible_asset_fraction/self.orig_susceptible_asset_fraction[:,i])**self.susceptibility_reduction_exponent)
+            else: exposure_reduction = 1.0
             
-            # Subtract here the initial exposure fraction from current exposure fraction to get the SLR driven number
-            self.annual_storm_damage_to_assets[:,i] = self.coastal_assets[:,i] * asset_exposure_reduction_because_of_retreat \
-                                              * self.flood_event_damage_fraction * (1.0 - self.storm_damage_resilience[:,i]) \
-                                              * np.maximum(0.0, self.orig_exposed_asset_fraction[:,i] - self.orig_exposed_asset_fraction[:,0])
+            # Subtract here the initial exposure fraction from current exposure fraction to get the SLR-driven exposure
+            storm_exposure_fraction = np.maximum(0.0,
+                self.orig_exposed_asset_fraction[:,i] * exposure_reduction - self.orig_exposed_asset_fraction[:,0]
+            )
+            self.annual_assets_exposed_to_storm_surges[:,i] = (self.coastal_assets[:,i] - self.annual_total_asset_retreat[:,i]) \
+                                                                * storm_exposure_fraction
+
+            self.annual_storm_damage_to_assets[:,i] = self.annual_assets_exposed_to_storm_surges[:,i] \
+                                                       * self.flood_event_damage_fraction * (1.0 - self.storm_damage_resilience[:,i])
 
 
+
+            if self.dbg==1: print('        damage calculation done')
+        else:
+            total_removed_fraction = 0.0
         ##########################################################################################
         ###
-        ### GROWTH of assets as GDP grows.
+        ### GROWTH of assets.
         ###
         ##########################################################################################
-
-
-        # TODO: Account for urbanization
 
         # Calculate likelihood of investment in coastal zone
         # -> Less growth if it is expected that net flood height will increase (or is already high)
+        expected_effective_flood_height = self.effective_flood_height[:,i] + self.expected_SLR_in_50_years[:,i] \
+                                            - self.potential_fp_height_increase_over_50_years[:,i]
+        if self.include_failing_protection:  dh = self.average_fp_height[:,i] + self.potential_fp_height_increase_over_50_years[:,i] \
+                                                     - self.average_fp_height[:,0]
+        else: dh = 0
+        expected_orig_susceptible_fraction = self.__fitted_variable(expected_effective_flood_height, dh, self.storm_suscept_params_assets)
+        expected_actual_susceptible_fraction = (expected_orig_susceptible_fraction - total_removed_fraction) \
+                                                / (1.0 - total_removed_fraction)
+
         if self.include_reduced_growth and self.damage:
             dflood =  np.maximum(0, self.expected_SLR_in_50_years[:,i] + self.effective_flood_height[:,i]\
                                      - self.potential_fp_height_increase_over_50_years[:,i])
             self.likelihood_of_investment_in_coastal_zones[:,i] = (1.0 - np.maximum(0, dflood / (dflood \
-                                            + self.effective_flood_height_at_which_investment_is_halved ))) * expected_susceptible_fraction \
-                                            + (1.0 - expected_susceptible_fraction)
+                                            + self.effective_flood_height_at_which_investment_is_halved ))) * expected_actual_susceptible_fraction \
+                                            + (1.0 - expected_actual_susceptible_fraction)
         else:
             self.likelihood_of_investment_in_coastal_zones[:,i] = 1.0
 
@@ -774,20 +1018,33 @@ class SLRImpactModel:
         if i >= self.nyears-1: return      
 
 
-        # Assets growth is being redistributed between coastal zones and inland, in case that there are expected damages
-        # First calculate theoretical asset growth in each coastal zone
-        theoretical_asset_growth = self.coastal_assets[:,i] * (self.GDP[:,i+1] / self.GDP[:,i] - 1.0)
 
-        # initialising some arrays for asset growth redistribution
-        actual_asset_growth = np.copy(theoretical_asset_growth)
-        safe_zone = np.ones_like(theoretical_asset_growth)
-        growth_moved_to_safe_zones = 0.0
+        # First calculate reference asset growth and investment in each coastal zone
+        reference_asset_growth = self.coastal_assets[:,i] * (self.assets[:,i+1] / self.assets[:,i] - 1.0)
+        asset_depreciation = self.coastal_assets[:,i] / self.coastal_asset_depreciation_time_scale
+        asset_investment = reference_asset_growth + asset_depreciation
 
-        # Remove small part of the growth from the insufficiently protected assets
+        # Under productivity feedback, lower GDP can dampen next-year coastal investment.
+        # Apply only to investment (not depreciation), with capped scaling.
+        if self.include_productivity_feedback:
+            reference_gdp_current = self.GDP[:,i] * self.USD_fac
+            gdp_ratio = self.__safe_divide(self.coastal_GDP[:,i], reference_gdp_current, default=1.0)
+            gdp_ratio = np.clip(gdp_ratio, 1e-6, None)
+            inv_scale = np.power(gdp_ratio, self.eta_productivity_to_investment)
+            inv_scale = np.clip(inv_scale, 0.5, 1.1)
+            asset_investment = asset_investment * inv_scale
+
+        # initialising some arrays for investment redistribution
+        actual_asset_investment = np.copy(asset_investment)
+        safe_zone = np.ones_like(asset_investment)
+        investment_moved_to_safe_zones = np.zeros(self.nreg)
+
+
+        # Remove small part of the investment from the insufficiently protected assets
         for icz, likelihood in enumerate(self.likelihood_of_investment_in_coastal_zones[:,i]):
             if likelihood < self.safe_coastal_zone_likelihood_threshold:
-                actual_asset_growth[icz] = theoretical_asset_growth[icz] * likelihood
-                growth_moved_to_safe_zones += theoretical_asset_growth[icz] * (1.0 - likelihood)
+                actual_asset_investment[icz] = asset_investment[icz] * likelihood
+                investment_moved_to_safe_zones[icz] = asset_investment[icz] * (1.0 - likelihood)
                 safe_zone[icz] = 0
         
 
@@ -795,24 +1052,21 @@ class SLRImpactModel:
         # avoid div by 0, in case there is no safe coastal zone
         if np.sum(safe_zone) != 0.0:
             safe_asset_fractions = (self.coastal_assets[:,i]*safe_zone) / np.sum(self.coastal_assets[:,i]*safe_zone)
-        else:
-            safe_asset_fractions = np.zeros_like(safe_zone)
-        asset_fractions = (self.coastal_assets[:,i]) / np.sum(self.coastal_assets[:,i])
         
-        # Add some of the removed growth to well protected assets,
+        # Add some of the removed investment to well protected assets,
         # but not all of it! Some is moved away from the coast, because it is not coast-specific.
-        growth_staying_at_coast = growth_moved_to_safe_zones * self.fraction_of_investments_that_must_be_at_the_coast
-        growth_moving_away_from_coast = growth_moved_to_safe_zones - growth_staying_at_coast
+        investment_staying_at_coast = investment_moved_to_safe_zones * self.fraction_of_investments_that_must_be_at_the_coast
+        investment_moving_away_from_coast = investment_moved_to_safe_zones - investment_staying_at_coast
 
-        for icz, likelihood in enumerate(self.likelihood_of_investment_in_coastal_zones[:,i]):
-            # if there is no safe coastal zone option, then the investment that has to stay in the coastal zone is 
-            # made in the original coastal zone without moving it around.
-            if sum(safe_zone) == 0 or not self.move_around_growth:
-                actual_asset_growth[icz] += growth_staying_at_coast * asset_fractions[icz]
-            # distribute the removed investment over the safe coastal zones relative to their fraction of all protected assets
-            elif likelihood >= self.safe_coastal_zone_likelihood_threshold:
-                actual_asset_growth[icz] += growth_staying_at_coast * safe_asset_fractions[icz]
+        if np.sum(safe_zone) == 0 or not self.move_around_growth:
+            actual_asset_investment += investment_staying_at_coast
+        else:
+            total_investment_staying_at_coast = np.sum(investment_staying_at_coast)
+            for icz, likelihood in enumerate(self.likelihood_of_investment_in_coastal_zones[:,i]):
+                if likelihood >= self.safe_coastal_zone_likelihood_threshold:
+                    actual_asset_investment[icz] += total_investment_staying_at_coast * safe_asset_fractions[icz]
 
+        if self.dbg==1: print('        asset growth calculation done')        
         ##########################################################################################
         ###
         ### UPDATE Coastal asset stock
@@ -820,8 +1074,8 @@ class SLRImpactModel:
         ##########################################################################################
         # The asset feedback switch (default: 0) determines what fraction of storm damages actually reduces coastal asset values.
         # In CIAM this is 0, because it is assumed that storm surge damages are repaired always.
-        self.coastal_assets[:,i+1] = self.coastal_assets[:,i] + actual_asset_growth[:] - self.annual_total_asset_retreat[:,i] \
-                                   - self.asset_feedback_switch \
+        self.coastal_assets[:,i+1] = self.coastal_assets[:,i] + actual_asset_investment - asset_depreciation \
+                                     - self.annual_total_asset_retreat[:,i] - self.asset_feedback_switch \
                                    * (1.0 - self.fraction_of_storm_damages_that_is_repaired) * self.annual_storm_damage_to_assets[:,i]
         return
         
@@ -829,60 +1083,122 @@ class SLRImpactModel:
 
     def __prepare_next_timestep(self,i):
         
-        # Calculate GDP(perCapita) internally or leave as external input?
+        # Calculate GDP(perCapita) internally via Cobb-Douglas formulation or leave as external input
+        # Cobb-Douglas formulation: GDP = TFP * K^alpha * L^(1-alpha)
         if self.include_gdp_effect:
-            self.coastal_GDP[:,i+1] = self.coastal_GDPperCapita[:,0] * self.coastal_population[:,0] \
-                                       * self.coastal_assets[:,i+1] / self.coastal_assets[:,0]
-            self.coastal_GDPperCapita[:,i+1] = self.coastal_GDP[:,i+1] / self.coastal_population[:,i+1]
-           
+
+            ref_gdp = self.GDP[:,i+1] * self.USD_fac
+            ref_capital = self.assets[:,i+1] * self.USD_fac
+            ref_labor = self.population[:,i+1]
+
+            ref_effective_inputs = np.power(np.maximum(ref_capital, 0.0), self.gdp_asset_elasticity) \
+                                 * np.power(np.maximum(ref_labor, 0.0), 1.0 - self.gdp_asset_elasticity)
+
+            ref_tfp = self.__safe_divide(ref_gdp, ref_effective_inputs, default=0.0)
+
+            # Baseline GDP without productivity feedback (for diagnostics and counterfactual loss)
+            gdp_without_productivity_feedback = self.__cobb_douglas_output(
+                ref_tfp,
+                self.coastal_assets[:,i+1],
+                self.coastal_population[:,i+1],
+                self.gdp_asset_elasticity
+            )
+
+            if self.include_productivity_feedback:
+                flooded_people_fraction = self.__safe_divide(
+                    self.annual_people_flooded[:,i],
+                    self.coastal_population[:,i],
+                    default=0.0
+                )
+                
+                exposed_asset_fraction = self.__safe_divide(
+                    self.annual_assets_exposed_to_storm_surges[:,i],
+                    self.coastal_assets[:,i],
+                    default=0.0
+                )
+
+                worker_productivity_multiplier = 1.0 - (1.0 - self.relative_worker_productivity_if_flooded) * flooded_people_fraction
+                asset_productivity_multiplier = 1.0 - (1.0 - self.relative_asset_productivity_if_exposed) * exposed_asset_fraction
+                productivity_multiplier = worker_productivity_multiplier * asset_productivity_multiplier
+            else:
+                productivity_multiplier = np.ones(self.nreg)
+
+            self.coastal_GDP[:,i+1] = gdp_without_productivity_feedback * productivity_multiplier
+            self.annual_GDP_loss_from_productivity_effect[:,i+1] = np.maximum(
+                0.0,
+                gdp_without_productivity_feedback - self.coastal_GDP[:,i+1]
+            )
+
+            self.coastal_GDPperCapita[:,i+1] = self.__safe_divide(
+                self.coastal_GDP[:,i+1],
+                self.coastal_population[:,i+1],
+                default=0.0
+            )
+        else:
+            self.coastal_GDP[:,i+1] = self.GDP[:,i+1] * self.USD_fac
+            self.annual_GDP_loss_from_productivity_effect[:,i+1] = 0.0
+            self.coastal_GDPperCapita[:,i+1] = self.__safe_divide(
+                self.coastal_GDP[:,i+1],
+                self.coastal_population[:,i+1],
+                default=0.0
+            )
+
         # Calculating flood damage resilience as in CIAM, depending on GDP per capita
         self.storm_damage_resilience[:,i+1] = self.coastal_GDPperCapita[:,i+1] / (self.coastal_GDPperCapita[:,i+1] + self.ypc_US_2010)
-
         
+        gdp_pc_ratio = self.__safe_divide(
+            self.coastal_GDPperCapita[:,i+1],
+            self.coastal_GDPperCapita[:,i],
+            default=1.0
+        )
+        pop_ratio = self.__safe_divide(
+            self.coastal_population[:,i+1],
+            self.coastal_population[:,i],
+            default=1.0
+        )
+
         #### Updating the value of land using a formula from CIAM repository
-        self.landvalue_appreciation_factor[:,i+1] = self.landvalue_appreciation_factor[:,i] \
-                    * np.exp(0.565 * (self.coastal_GDPperCapita[:,i+1]/self.coastal_GDPperCapita[:,i] - 1.0) \
-                            + 0.313 * (self.coastal_population[:,i+1]/self.coastal_population[:,i] - 1.0) )
+        landvalue_growth = 0.565 * (gdp_pc_ratio - 1.0) + 0.313 * (pop_ratio - 1.0)
+        landvalue_growth = np.clip(landvalue_growth, -0.1, 0.1)
+
+        self.landvalue_appreciation_factor[:,i+1] = self.landvalue_appreciation_factor[:,i] * (1.0 + landvalue_growth)
+
 
         # The net global flood height 
         self.effective_flood_height[:,i+1] = (self.SLR[:,i+1]-self.SLR[:,0]) - (self.average_fp_height[:,i+1] - self.average_fp_height[:,0])
         
         # Update the susceptible and inundated theoretical fractions for the next time step, based on the updated net flood height
-        dflood = self.effective_flood_height
+        dflood = self.effective_flood_height[:,i+1]
+        if self.include_failing_protection:  dh = self.average_fp_height[:,i+1] - self.average_fp_height[:,0]
+        else: dh = 0
 
-        self.orig_susceptible_asset_fraction[:,i+1]  = self.fit_function(dflood[:,i+1], self.storm_suscept_params_assets, self.iFit)
-        self.orig_susceptible_people_fraction[:,i+1] = self.fit_function(dflood[:,i+1], self.storm_suscept_params_people, self.iFit)
-        self.orig_exposed_asset_fraction[:,i+1]      = self.fit_function(dflood[:,i+1], self.storm_exposure_params_assets, self.iFit)
-        self.orig_exposed_people_fraction[:,i+1]     = self.fit_function(dflood[:,i+1], self.storm_exposure_params_people, self.iFit)
-
-        self.inundated_original_asset_fraction[:,i+1] = np.maximum(self.inundated_original_asset_fraction[:,i], 
-                                                                   self.fit_function(dflood[:,i+1], self.inund_params_assets, self.iFit))
-        self.inundated_original_people_fraction[:,i+1] = np.maximum(self.inundated_original_people_fraction[:,i],
-                                                                    self.fit_function(dflood[:,i+1], self.inund_params_people, self.iFit))
-        self.inundated_area[:,i+1] = np.maximum(self.inundated_area[:,i], self.fit_function(dflood[:,i+1], self.inund_params_area, self.iFit))
-
-        # To get the abandoned area during retreat, we first calculate the effective retreat height using the asset inundation without
-        # initial flood protection (the inverse of the log function used to calculate inundated assets in this case)
-        self.effective_retreat_height[:,i] = self.inverse_fit_function(self.retreated_original_asset_fraction[:,i], self.inund_params_assets, 1)
-        self.abandoned_area[:,i+1] = np.maximum(self.abandoned_area[:,i], 
-                                                self.fit_function(self.effective_retreat_height[:,i],self.inund_params_area, 1))
-
+        for iparam, param in enumerate(self.parameters):
+            self.variables[iparam][:,i+1] = self.__fitted_variable(dflood,dh,param, limit=self.limits[iparam])
 
         return
 
     def __make_outputs(self):
         
         # ASSETS
-        self.assets_lost_during_retreat = (1.0 - self.mobile_asset_fraction) * (self.annual_reactive_asset_retreat \
-                                               + self.annual_proactive_asset_retreat * self.not_depreciated_fraction_of_assets_at_time_of_retreat)
 
+        self.assets_lost_during_reactive_retreat = (1.0 - self.mobile_asset_fraction) * self.annual_reactive_asset_retreat
+        self.assets_lost_during_proactive_retreat = (1.0 - self.mobile_asset_fraction) * self.annual_proactive_asset_retreat * self.not_depreciated_fraction_of_assets_at_time_of_retreat
+        self.assets_lost_during_retreat = self.assets_lost_during_reactive_retreat + self.assets_lost_during_proactive_retreat
+
+        self.asset_relocation_cost_reactive = self.annual_reactive_asset_retreat * self.mobile_asset_fraction * self.asset_relocation_cost_factor
+        self.asset_relocation_cost_proactive = self.annual_proactive_asset_retreat * self.mobile_asset_fraction * self.asset_relocation_cost_factor
         self.asset_relocation_cost = self.annual_total_asset_retreat * self.mobile_asset_fraction * self.asset_relocation_cost_factor
+
+        self.asset_demolition_cost_reactive = self.annual_reactive_asset_retreat * self.asset_demolition_cost_factor * (1.0 - self.mobile_asset_fraction)
+        self.asset_demolition_cost_proactive = self.annual_proactive_asset_retreat * self.asset_demolition_cost_factor * (1.0 - self.mobile_asset_fraction)
         self.asset_demolition_cost = self.annual_total_asset_retreat * self.asset_demolition_cost_factor * (1.0 - self.mobile_asset_fraction)
 
-        
         # PEOPLE
-        # Reactive retreat is five times as costly as proactive retreat, just like in CIAM
-        self.people_retreat_cost = (self.annual_proactive_people_retreat + self.increase_factor_for_costs_of_reactive_retreat * self.annual_reactive_people_retreat) * self.coastal_GDPperCapita
+        
+        self.people_retreat_cost_reactive = self.annual_reactive_people_retreat * self.coastal_GDPperCapita * self.people_retreat_cost_factor
+        self.people_retreat_cost_proactive = self.annual_proactive_people_retreat * self.coastal_GDPperCapita * self.people_retreat_cost_factor
+        self.people_retreat_cost = self.people_retreat_cost_reactive + self.people_retreat_cost_proactive
+
 
         # CIAM reference: This is for comparison to CIAM output
 
@@ -894,33 +1210,62 @@ class SLRImpactModel:
 
         # 1. Opportunity cost: value of land used up for flood protection
         #   - DON'T (subtract the initial fp height, in order to only get the additional opportunity costs), not done in CIAM
+        #     -> From now on, do actually only account for the increase in fp height, despite CIAM not doing it
         #   - Factor 1.7 comes from ratio between dike height and width (60° angle, as in CIAM)
         #   - In the end divided by 2, as in CIAM
         self.fp_land_opportunity_cost = self.total_fp_length[:,np.newaxis] * 1.7 * self.average_fp_height * 0.001 * land_cost_per_sqkm / 2.0
 
         # 2. Opportunity cost: value of land that is inundated or abandoned
-        lost_area = np.maximum(self.inundated_area, self.abandoned_area)
-        self.lost_land_opportunity_cost =  lost_area * land_cost_per_sqkm
+        lower_bound = self.inundated_area
+        upper_bound = self.surge1_inundated_area
+        inundated_area = lower_bound + self.retreat_sensitivity * (upper_bound - lower_bound)
+        self.inundated_area_opportunity_cost = inundated_area * land_cost_per_sqkm
+        self.abandoned_area_opportunity_cost = (self.abandoned_area - inundated_area) * land_cost_per_sqkm
 
         # Total opportunity costs of the land that is lost
-        self.total_opportunity_cost = self.fp_land_opportunity_cost + self.lost_land_opportunity_cost
+        self.total_opportunity_cost = self.fp_land_opportunity_cost + self.abandoned_area_opportunity_cost + self.inundated_area_opportunity_cost
 
+        # All land that is lost either for protection or from inundation or from retreat
+        self.land_lost = np.maximum(self.abandoned_area, self.total_fp_length[:,np.newaxis] * 1.7 * self.average_fp_height * 0.001 / 2.0)
 
         #####
         # CIAM reference: These are for comparison to CIAM output
         #####
+
+        ### SLR driven maintenance costs
+        ref_maintenance_costs = self.average_fp_height[:,0,None] * self.total_fp_length[:,None] \
+                                                   * self.construction_cost[:,:] *  self.maintenance_cost_fraction
+        
+        annual_SLR_costs_of_fp_maintenance = np.maximum(0, self.annual_costs_of_fp_maintenance - ref_maintenance_costs)
+
+
         self.relocation_cost = self.asset_relocation_cost + self.asset_demolition_cost + self.people_retreat_cost
-        self.flood_cost = self.assets_lost_during_retreat + self.lost_land_opportunity_cost
-        self.construct_cost = self.fp_land_opportunity_cost + self.effective_annual_investment_in_fp + self.annual_costs_of_fp_maintenance
-        self.net_construct_cost = self.fp_land_opportunity_cost + self.effective_annual_investment_in_fp \
-                + self.annual_costs_of_fp_maintenance - self.annual_costs_of_fp_maintenance_noadapt
+        self.flood_cost = self.assets_lost_during_retreat + self.abandoned_area_opportunity_cost + self.inundated_area_opportunity_cost
+        self.construct_cost = self.fp_land_opportunity_cost + self.effective_annual_investment_in_fp + annual_SLR_costs_of_fp_maintenance
         self.storm_cost = self.annual_storm_damage_to_assets
+
+
+        ### Overall SLR costs, all potential costs added upp
+        self.annual_SLR_costs = self.relocation_cost + self.flood_cost +  self.construct_cost + self.storm_cost
+
+        ### SLR costs separated by damages or adaptation_costs
+        self.annual_SLR_damages = self.assets_lost_during_reactive_retreat + self.asset_relocation_cost_reactive + self.asset_demolition_cost_reactive\
+                                            + self.people_retreat_cost_reactive + self.storm_cost + self.inundated_area_opportunity_cost
+
+        self.annual_SLR_adaptation_costs = self.assets_lost_during_proactive_retreat + self.asset_relocation_cost_proactive + self.asset_demolition_cost_proactive \
+                                            + self.people_retreat_cost_proactive + self.construct_cost + self.abandoned_area_opportunity_cost
 
 
         return
 
     def getTotalCoastalGDP(self): return np.sum(self.coastal_GDP,axis=0)
-    def getTotalGDPperCapita(self): return np.sum(self.coastal_GDP,axis=0) / np.sum(self.coastal_population,axis=0)
+    def getTotalGDPperCapita(self):
+        return self.__safe_divide(
+            np.sum(self.coastal_GDP, axis=0),
+            np.sum(self.coastal_population, axis=0),
+            default=0.0
+        )
+        
     def getTotalCoastalAssets(self): return np.sum(self.coastal_assets, axis=0)
     def getTotalCoastalPopulation(self): return np.sum(self.coastal_population, axis=0)
 
@@ -928,18 +1273,15 @@ class SLRImpactModel:
     def getTotalRelocationCost(self): return np.sum(self.relocation_cost, axis=0)
     def getTotalFloodCost(self): return np.sum(self.flood_cost, axis=0)
     def getTotalConstructCost(self): return np.sum(self.construct_cost, axis=0)
-    def getTotalNetConstructCost(self): return np.sum(self.net_construct_cost, axis=0)
 
 
     def getTotalProtectionInvestment(self): return np.sum(self.effective_annual_investment_in_fp, axis=0)
     def getTotalMaintenanceCost(self): return np.sum(self.annual_costs_of_fp_maintenance, axis=0)
-    def getNetMaintenanceCost(self): return self.annual_costs_of_fp_maintenance - self.annual_costs_of_fp_maintenance_noadapt
-    def getTotalNetMaintenanceCost(self): return np.sum(self.annual_costs_of_fp_maintenance - self.annual_costs_of_fp_maintenance_noadapt, axis=0)
-
     def getTotalOpportunityCost(self): return np.sum(self.total_opportunity_cost, axis=0)
 
     def getTotalPeopleFlooded(self): return np.sum(self.annual_people_flooded, axis=0)
     def getTotalFloodFatalities(self): return np.sum(self.annual_flood_fatalities, axis=0)
+    def getTotalAnnualGDPLossFromProductivityEffect(self): return np.sum(self.annual_GDP_loss_from_productivity_effect, axis=0)
     
 
 
