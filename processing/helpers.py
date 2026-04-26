@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.stats import gumbel_r
-
+import sys
 
 #### SLR
 
@@ -44,6 +44,53 @@ def getLocalSLR(lat, lon, SLRs, weights):
         sys.exit('Only NaNs found around this location: '+str(lat)+' '+str(lon)+' !')
     
     return wt_thermo*SLRs[0] + wt_LWS*SLRs[1] + wt_MG*SLRs[2] + wt_GIS*SLRs[3] + wt_AIS*SLRs[4]
+
+def getLocalSLR_map(lat, lon, SLRs, weights):
+    # implemented to only work without time dimension
+    # SLRs should be a list of 5 scalars, one for each SLR compoennt (thermo, LWS, MG, GIS, AIS)
+
+    # lat lon are 2d maps
+    lat_flat = lat.flatten()
+    lon_flat = lon.flatten()
+
+    # convert input longitude to degrees east
+    lon_flat = np.where(lon_flat < 0, lon_flat + 360, lon_flat)
+
+    local_SLR = np.empty_like(lat_flat, dtype=float)
+    
+    nlat, nlon = weights[0].shape
+
+    for i in range(lat_flat.size):
+
+        ilat = int(np.floor(lat_flat[i]) + 90)
+        ilon = int(np.floor(lon_flat[i])) % nlon
+
+        # clamp latitude index
+        ilat = np.clip(ilat, 0, nlat - 1)
+        
+        wt_thermo = 1.0
+        wt_LWS = 1.0
+    
+        wt_MG = float('NaN')
+        shift = 0
+        while np.isnan(wt_MG):
+            shift += 1
+            i1 = max(ilat - shift, 0)
+            i2 = min(ilat + shift + 1, nlat)
+            j1 = max(ilon - shift, 0)
+            j2 = min(ilon + shift + 1, nlon)
+
+            wt_MG = np.nanmean(weights[0][i1:i2, j1:j2])
+            wt_GIS = np.nanmean(weights[1][i1:i2, j1:j2])
+            wt_AIS = np.nanmean(weights[2][i1:i2, j1:j2])
+
+            # if we've exhausted the whole map and still get NaN, raise
+            if i1 == 0 and i2 == nlat and j1 == 0 and j2 == nlon and np.isnan(wt_MG):
+                raise ValueError(f'Only NaNs found around this location: {lat_flat[i]} {lon_flat[i]} !')
+
+        local_SLR[i] = wt_thermo*SLRs[0] + wt_LWS*SLRs[1] + wt_MG*SLRs[2] + wt_GIS*SLRs[3] + wt_AIS*SLRs[4]
+    
+    return np.reshape(local_SLR, lat.shape)
 
 
 def getlSLRweights(lat,lon,weights):
